@@ -91,7 +91,7 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
     }, {
       operation: this.operation,
       chapterNumber: prepared.context.source.chapterNumber,
-      promptKeys: [this.operation === 'review-chapter' ? 'consistency_check' : this.operation === 'refine-draft' ? 'refine_chapter' : 'refine_from_review'],
+      promptKeys: [this.operation === 'review-chapter' ? 'consistency_check' : this.operation === 'refine-draft' ? 'refine_chapter' : this.operation === 'humanize-draft' ? 'humanize_draft' : 'refine_from_review'],
       skillStages: [this.operation === 'review-chapter' ? 'review' : 'refinement'],
       output: this.operation === 'review-chapter' ? 'structured-data' : 'visible-text',
       reviewRevisionContextId: prepared.contextId,
@@ -206,7 +206,9 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
         id: `diff-${sourcePath}-${receipt.id}`,
         name: this.operation === 'refine-from-review'
           ? text(`审稿修复：第${chapter}章`, `Review fix: Chapter ${chapter}`)
-          : text(`修稿合并：第${chapter}章`, `Revision merge: Chapter ${chapter}`),
+          : this.operation === 'humanize-draft'
+            ? text(`去AI味合并：第${chapter}章`, `De-AI merge: Chapter ${chapter}`)
+            : text(`修稿合并：第${chapter}章`, `Revision merge: Chapter ${chapter}`),
         type: pending ? 'diff' : 'chapter', filePath: pending ? sourcePath : revisionPath,
         ...(!pending ? { draftStatus: 'archived' as const } : {}),
         originalContent: receipt.source.content, content: receipt.content, revisionPath,
@@ -217,8 +219,11 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
       callbacks.log(this.operation === 'refine-from-review'
         ? text(`审稿修复完成（${countDraftUnits(receipt.content)} 字），修订稿版本 r${receipt.index}`,
           `Review-based revision complete (${countDraftUnits(receipt.content)} words); revision r${receipt.index} is ready.`)
-        : text(`修稿完成（${countDraftUnits(receipt.content)} 字），修订稿版本 r${receipt.index}`,
-          `Revision complete (${countDraftUnits(receipt.content)} words); revision r${receipt.index} is ready.`))
+        : this.operation === 'humanize-draft'
+          ? text(`去AI味完成（${countDraftUnits(receipt.content)} 字），修订稿版本 r${receipt.index}`,
+            `De-AI revision complete (${countDraftUnits(receipt.content)} words); revision r${receipt.index} is ready.`)
+          : text(`修稿完成（${countDraftUnits(receipt.content)} 字），修订稿版本 r${receipt.index}`,
+            `Revision complete (${countDraftUnits(receipt.content)} words); revision r${receipt.index} is ready.`))
       const units = countDraftUnits(receipt.content), target = frozen.config.wordsPerChapter
       const sourceUnits = countDraftUnits(frozen.source.content)
       const targetMaximum = draftTargetUnitRange(target).maximum

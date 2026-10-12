@@ -1,7 +1,7 @@
 import { formatResourceUri } from '../../shared/project-paths'
 import { parseResourceUri, resourceWriteAllowed } from '../../shared/project-paths'
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Sparkles, Search, BadgeCheck, Save, FileStack, FileText, Wrench, Check } from 'lucide-react'
+import { Sparkles, Search, BadgeCheck, Save, FileStack, FileText, Wrench, Check, Eraser } from 'lucide-react'
 
 import { useProjectStore } from '../../stores/project-store'
 import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
@@ -145,7 +145,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
 
   const [saving, setSaving] = useState(false)
   const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
-  const [confirmAction, setConfirmAction] = useState<'refine' | 'review' | null>(null)
+  const [confirmAction, setConfirmAction] = useState<'refine' | 'review' | 'humanize' | null>(null)
   const [userRefinePrompt, setUserRefinePrompt] = useState('')
   // 审稿维度多选
   const REVIEW_DIMS = [
@@ -325,6 +325,33 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
       toast.error(text(`修稿启动失败：${e}`, 'Could not start AI revision.'))
+    }
+  }
+
+  /** 执行去AI味（复用修稿生命周期，使用 humanize_draft 模板） */
+  const doHumanize = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    try {
+      const source = await freezeDraftSourceForAI(projectSession)
+      if (!source || !isProjectSessionCurrent(projectSession)) return
+      const { useWorkflowStore } = await import('../../stores/workflow-store')
+      const { createHumanizeOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
+      if (!isProjectSessionCurrent(projectSession)) return
+      if (!isFrozenAISourceCurrent(source.body, source.sourceDraft)) return
+
+      useWorkflowStore.getState().startWorkflow(createHumanizeOnlyWorkflow({
+        projectPath: projectSession.projectPath,
+        chapterNumber: meta.chapterNumber,
+        chapterTitle: meta.chapterTitle ?? '未知标题',
+        draftPath: filePath,
+        draftContent: source.body,
+        sourceDraft: source.sourceDraft,
+        userHumanizePrompt: userRefinePrompt.trim() || undefined,
+      }, projectSession), false)
+    } catch (e) {
+      if (!isProjectSessionCurrent(projectSession)) return
+      toast.error(text(`去AI味启动失败：${e}`, 'Could not start the de-AI rewrite.'))
     }
   }
 
@@ -769,6 +796,18 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
                 {text('AI 修稿', 'AI revise')}
             </Button>
 
+            {/* 去AI味 */}
+            <Button
+              variant="ai"
+              size="sm"
+              onClick={() => { setUserRefinePrompt(''); setConfirmAction('humanize') }}
+              disabled={isChapterBusy}
+                title={text('去AI味 — 消除 AI 生成痕迹，情节与事实保持不变，生成修订并打开合并视图', 'De-AI — remove AI-generated flavor while preserving plot and facts, create a revision, and open the merge view')}
+            >
+              <Eraser size={12} />
+                {text('去AI味', 'De-AI')}
+            </Button>
+
             {/* AI 审稿 */}
             <Button
               variant="ai"
@@ -876,10 +915,14 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         <DialogContent className="max-w-[440px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Sparkles size={15} className="text-[var(--color-accent)]" />
+              {confirmAction === 'humanize'
+                ? <Eraser size={15} className="text-[var(--color-accent)]" />
+                : <Sparkles size={15} className="text-[var(--color-accent)]" />}
               {confirmAction === 'refine'
                 ? text('AI 修稿确认', 'Confirm AI revision')
-                : text('AI 审稿确认', 'Confirm AI review')}
+                : confirmAction === 'humanize'
+                  ? text('去AI味确认', 'Confirm de-AI rewrite')
+                  : text('AI 审稿确认', 'Confirm AI review')}
             </DialogTitle>
             <DialogDescription>
               {text('对象：', 'Target: ')}{meta
@@ -893,6 +936,13 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
                 <div className="font-medium text-[var(--color-text)]">{text('本次【直接修稿】范围：', 'This direct revision will:')}</div>
                 <div>{text('1. 全文基础润色、词汇优化，增强画面与表现力。', '1. Polish the full chapter, improve wording, and strengthen imagery and expression.')}</div>
                 <div>{text('2. 可在下方指定的额外修稿要求。', '2. Follow any additional revision instructions below.')}</div>
+              </>
+            ) : confirmAction === 'humanize' ? (
+              <>
+                <div className="font-medium text-[var(--color-text)]">{text('本次【去AI味】范围：', 'This de-AI rewrite will:')}</div>
+                <div>{text('1. 识别并消除 AI 生成痕迹（程式化用词、套路句式、均匀结构等）。', '1. Detect and remove AI-generated flavor (stock wording, formulaic patterns, uniform structure, etc.).')}</div>
+                <div>{text('2. 情节、事实与对话内容保持不变，字数变化控制在 ±10%。', '2. Preserve plot, facts, and dialogue; word count stays within ±10%.')}</div>
+                <div>{text('3. 可在下方指定额外的去AI味要求。', '3. Follow any additional de-AI instructions below.')}</div>
               </>
             ) : (
               <>
@@ -931,11 +981,13 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
             )}
           </div>
 
-          {/* 修稿时显示自定义提示词输入框 */}
-          {confirmAction === 'refine' && (
+          {/* 修稿/去AI味时显示自定义提示词输入框 */}
+          {(confirmAction === 'refine' || confirmAction === 'humanize') && (
             <div className="px-5 pb-2">
               <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
-                {text('附加修稿要求（可选）：', 'Additional revision guidance (optional):')}
+                {confirmAction === 'humanize'
+                  ? text('附加去AI味要求（可选）：', 'Additional de-AI guidance (optional):')
+                  : text('附加修稿要求（可选）：', 'Additional revision guidance (optional):')}
               </label>
               <textarea
                 className="w-full px-3 py-2 rounded-md text-sm"
@@ -947,10 +999,15 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
                   resize: 'vertical',
                   outline: 'none',
                 }}
-                placeholder={text(
-                  '例如：加强打斗场面的画面感；把结尾的伏笔改为更隐晦的暗示；对白太书面化，改为口语化风格...',
-                  'For example: make action scenes more vivid; make the final foreshadowing subtler; make dialogue less formal...',
-                )}
+                placeholder={confirmAction === 'humanize'
+                  ? text(
+                    '例如：对白再口语化一点；我常写"眼底闪过一丝"，请多替换这类表达；保留结尾的悬念钩子...',
+                    'For example: make dialogue more colloquial; replace stock phrases like "a flicker passed through their eyes"; keep the ending hook...',
+                  )
+                  : text(
+                    '例如：加强打斗场面的画面感；把结尾的伏笔改为更隐晦的暗示；对白太书面化，改为口语化风格...',
+                    'For example: make action scenes more vivid; make the final foreshadowing subtler; make dialogue less formal...',
+                  )}
                 value={userRefinePrompt}
                 onChange={e => setUserRefinePrompt(e.target.value)}
               />
@@ -965,6 +1022,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
                 const act = confirmAction
                 setConfirmAction(null)
                 if (act === 'refine') doRefine()
+                else if (act === 'humanize') doHumanize()
                 else if (act === 'review') doReview()
               }}
             >

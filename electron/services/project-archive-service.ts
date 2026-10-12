@@ -504,7 +504,7 @@ function reviewHistoryItem(value: unknown): void {
 
 function assertReviewContext(value: unknown): Record<string, unknown> {
   const context = object(value, REVIEW_CONTEXT_FIELDS)
-  if (context.version !== 1 || !['review-chapter', 'refine-draft', 'refine-from-review'].includes(String(context.operation))) {
+  if (context.version !== 1 || !['review-chapter', 'refine-draft', 'refine-from-review', 'humanize-draft'].includes(String(context.operation))) {
     fail('PORTABLE_UNSAFE_PROJECTION')
   }
   reviewSource(context.source)

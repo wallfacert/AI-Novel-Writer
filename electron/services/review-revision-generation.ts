@@ -161,7 +161,7 @@ export class ReviewRevisionGeneration {
     const prepared = selection.reviewRevisionContextId && this.contexts.get(selection.reviewRevisionContextId)
     if (!prepared) throw new Error('GENERATION_REVIEW_CONTEXT_REQUIRED')
     const { context } = prepared, finalized = context.source.status === 'finalized'
-    const prompt = context.operation === 'review-chapter' ? 'consistency_check' : context.operation === 'refine-draft' ? 'refine_chapter' : 'refine_from_review'
+    const prompt = context.operation === 'review-chapter' ? 'consistency_check' : context.operation === 'refine-draft' ? 'refine_chapter' : context.operation === 'humanize-draft' ? 'humanize_draft' : 'refine_from_review'
     if (selection.operation !== context.operation || selection.chapterNumber !== context.source.chapterNumber
       || !isDeepStrictEqual(selection.promptKeys, [prompt]) || !isDeepStrictEqual(selection.skillStages, [context.operation === 'review-chapter' ? 'review' : 'refinement'])
       || selection.outputOverrides !== undefined || selection.batchId !== undefined || selection.continueDirectoryOperationId !== undefined

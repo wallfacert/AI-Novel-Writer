@@ -12,7 +12,7 @@ import type { ReviewCycleRecheckContext } from './review-cycle'
 import { renderHumanConfirmedReviewBrief } from './human-confirmed-review'
 import { writingLanguageText } from './writing-language'
 
-export type ReviewRevisionOperation = 'review-chapter' | 'refine-draft' | 'refine-from-review'
+export type ReviewRevisionOperation = 'review-chapter' | 'refine-draft' | 'refine-from-review' | 'humanize-draft'
 /** Asserts the author's selected version; prose and all stored facts are loaded by main. */
 export interface PrepareReviewRevisionRequest {
   operation: ReviewRevisionOperation

@@ -84,7 +84,7 @@ function stream(content = '中文候选', reasoning?: string) {
   return fetch
 }
 describe('generation public IPC with actual project authority and SQLite', () => {
-  it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('routes %s through the renderer client, registered IPC, owner and actual formal repository', async operation => {
+  it.each(['review-chapter', 'refine-draft', 'refine-from-review', 'humanize-draft'] as const)('routes %s through the renderer client, registered IPC, owner and actual formal repository', async operation => {
     const body = '林岚到达海港，发现了留下的信。'
     const revisedBody = '林岚到达海港，发现了父亲留下的信。'
     getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'海港'); INSERT INTO contents(id,body) VALUES(1,''); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,18)")
@@ -101,23 +101,30 @@ describe('generation public IPC with actual project authority and SQLite', () =>
       const prompt = '仅处理原稿与作者确认意见。'
       const run = await ipc.invokeWithProjectSession(session, 'generation:begin', { operation: op, uiActionNonce: `明确作者动作:${op}`,
         modelId: prepared.modelId ?? model.id, chapterNumber: 1, selectedDraftIds: [1], selectedFinalizedDraftIds: [],
-        promptKeys: [op === 'review-chapter' ? 'consistency_check' : op === 'refine-draft' ? 'refine_chapter' : 'refine_from_review'],
+        promptKeys: [op === 'review-chapter' ? 'consistency_check' : op === 'refine-draft' ? 'refine_chapter' : op === 'humanize-draft' ? 'humanize_draft' : 'refine_from_review'],
         skillStages: [op === 'review-chapter' ? 'review' : 'refinement'], output: op === 'review-chapter' ? 'structured-data' : 'visible-text',
         reviewRevisionContextId: prepared.contextId, authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(prepared.context) }],
         ...(prepared.parentRootActionId ? { parentRootActionId: prepared.parentRootActionId } : {}) })
       const confirmation = prepared.context.confirmation
       const reviewBrief = confirmation ? renderHumanConfirmedReviewBrief(confirmation.snapshot, prepared.context.writingLanguage) : ''
-      const decision = confirmation
-        ? { ...materialDecision(prompt), capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: Buffer.byteLength(reviewBrief) },
-          included: [{ sourceId: `review:confirmed:${confirmation.reviewSourceId}`, revision: confirmation.reviewSourceId,
-            contentHash: textHash(reviewBrief), category: 'author' as const, required: true, units: Buffer.byteLength(reviewBrief) }] }
-        : { ...materialDecision(prompt), capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: 0 },
-          coverage: { required: 0, included: 0, complete: true }, included: [] }
-      const bound = await ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle, materialDecision: decision })
-      expect((await ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle, materialDecision: decision })).handle)
-        .toEqual(bound.handle)
-      await expect(ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle,
-        materialDecision: { ...decision, promptHash: textHash('被替换的提示词') } })).rejects.toThrow('GENERATION_MATERIAL_DECISION_CONFLICT')
+      // 去AI味不做材料准入，主进程对它的 bind-material-decision 直接拒绝。
+      if (op !== 'humanize-draft') {
+        const decision = confirmation
+          ? { ...materialDecision(prompt), capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: Buffer.byteLength(reviewBrief) },
+            included: [{ sourceId: `review:confirmed:${confirmation.reviewSourceId}`, revision: confirmation.reviewSourceId,
+              contentHash: textHash(reviewBrief), category: 'author' as const, required: true, units: Buffer.byteLength(reviewBrief) }] }
+          : { ...materialDecision(prompt), capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: 0 },
+            coverage: { required: 0, included: 0, complete: true }, included: [] }
+        const bound = await ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle, materialDecision: decision })
+        expect((await ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle, materialDecision: decision })).handle)
+          .toEqual(bound.handle)
+        await expect(ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle,
+          materialDecision: { ...decision, promptHash: textHash('被替换的提示词') } })).rejects.toThrow('GENERATION_MATERIAL_DECISION_CONFLICT')
+      } else {
+        await expect(ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle,
+          materialDecision: { ...materialDecision(prompt), capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: 0 },
+            coverage: { required: 0, included: 0, complete: true }, included: [] } })).rejects.toThrow('GENERATION_MATERIAL_DECISION_INVALID')
+      }
       const result = await ipc.invokeWithProjectSession(session, 'generation:execute', { handle: run.handle, invocationNonce: `实际请求:${op}`, task: {
         purpose: op, output: op === 'review-chapter' ? 'structured-data' : 'visible-text', messages: [{ role: 'user', content: prompt }],
       } })

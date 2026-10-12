@@ -29,6 +29,7 @@ const REQUIRED_CORE_KEYS = [
   'first_chapter_draft',
   'next_chapter_draft',
   'refine_chapter',
+  'humanize_draft',
   'consistency_check',
   'refine_from_review',
   'generate_chapter_notes',

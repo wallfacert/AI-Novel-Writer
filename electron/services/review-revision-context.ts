@@ -15,7 +15,7 @@ import { ReviewRepository } from '../repositories/review-repository'
 import { ReviewCycleRepository } from '../repositories/review-cycle-repository'
 import { textHash } from '../repositories/generation-run-repository'
 
-export const REVIEW_REVISION_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review'] as const
+export const REVIEW_REVISION_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review', 'humanize-draft'] as const
 const fail = (): never => { throw new Error('GENERATION_REVIEW_CONTEXT_INVALID') }
 
 /** Reconstruct only the original author selection, never a newer manuscript or confirmation. */
@@ -42,7 +42,7 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
     || !['zh-CN', 'en-US'].includes(request.uiLocale) || !request.expectedDraft
     || Object.keys(request.expectedDraft).some(key => !['chapterNumber', 'version', 'status', 'contentHash'].includes(key))
     || !Array.isArray(request.authorInputs) || request.authorInputs.length > 2) fail()
-  const allowedInputs = request.operation === 'refine-draft' ? ['user-prompt', 'merged-guidance'] : request.operation === 'review-chapter' ? ['review-focus'] : []
+  const allowedInputs = request.operation === 'refine-draft' ? ['user-prompt', 'merged-guidance'] : request.operation === 'review-chapter' ? ['review-focus'] : request.operation === 'humanize-draft' ? ['user-prompt'] : []
   if (new Set(request.authorInputs.map(item => item?.id)).size !== request.authorInputs.length
     || request.authorInputs.some(item => !item || Object.keys(item).some(key => !['id', 'text'].includes(key))
       || !allowedInputs.includes(item.id) || typeof item.text !== 'string' || Buffer.byteLength(item.text) > 8 * 1024 * 1024)) fail()

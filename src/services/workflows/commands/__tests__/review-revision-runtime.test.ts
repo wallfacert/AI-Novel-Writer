@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
+import { HumanizeDraftCommand } from '../humanize-draft.command'
 import { RefineDraftCommand } from '../refine-draft.command'
 import { RefineFromReviewCommand } from '../refine-from-review.command'
 import { ReviewChapterCommand } from '../review-chapter.command'
@@ -93,6 +94,50 @@ it('saves a unique complete report surrounded by prose after one model response'
   expect(f.writes()).toBe(1)
   expect(f.fixture.recovery?.latestArtifact?.text).toBe(wrapped)
   expect(JSON.parse(f.fixture.recovery!.saved!.content).items[0]).toEqual(JSON.parse(review).items[0])
+})
+
+it('humanize-draft rewrites with its own template, commits as refine, and opens the de-AI merge tab without material admission', async () => {
+  const f = setup([{ content: revised, finishReason: 'stop' }])
+  const selected = { draftPath: 'ai-novel://draft/1', draftContent: source.content, chapterNumber: 1,
+    sourceDraft: { id: 1, chapterNumber: 1, version: 1, status: 'draft' as const, contentRevision: 1 } }
+  f.fixture.selected = selected
+  await new HumanizeDraftCommand({ ...selected,
+    chapterInfo: { projectPath, chapterNumber: 1, title: '章节标题', role: '', purpose: '', keyEvents: '', characters: [] },
+    userHumanizePrompt: '作者附加要求' }, f.dependencies).execute(f.args)
+  const prepare = f.fixture.calls.find(call => call.channel === 'review-revision:prepare')
+  expect(prepare?.args[0]).toMatchObject({ operation: 'humanize-draft',
+    authorInputs: [{ id: 'user-prompt', text: '作者附加要求' }] })
+  expect(f.fixture.materialDecisions).toHaveLength(0)
+  expect(f.providerBindCounts).toEqual([0])
+  const prompt = f.provider.mock.calls.flatMap(call => call[0] as Array<{ role: string; content: string }>)
+    .map(message => message.content).join('\n')
+  expect(prompt).toContain('AI 味特征清单')
+  expect(prompt).toContain('【用户额外去AI味指导（最高优先级）】\n作者附加要求')
+  expect(prompt).toContain('原稿正文。')
+  const replace = f.backend.mock.calls.find(call => call[0] === 'db:revision-replace-pending') as unknown as
+    [string, { revisionType: string }] | undefined
+  expect(replace?.[1].revisionType).toBe('refine')
+  expect(useEditorStore.getState().tabs.at(-1)).toMatchObject({ type: 'diff', name: '去AI味合并：第1章',
+    originalContent: source.content, content: revised })
+  expect(f.args.callbacks.log.mock.calls.some(([text]) => text.includes('去AI味完成'))).toBe(true)
+})
+
+it('humanize-draft maps a no-op model result to a friendly retry message without saving', async () => {
+  const f = setup([{ content: revised, finishReason: 'stop' }])
+  const original = f.backend.getMockImplementation() as unknown as (channel: string, ...rest: unknown[]) => Promise<unknown>
+  // Mock 的返回类型被收窄为联合，此处统一委托需桥接 mock 类型。
+  f.backend.mockImplementation((async (channel: string, ...rest: unknown[]) => {
+    if (channel === 'db:revision-replace-pending') return { success: false, error: 'GENERATION_REVIEW_REVISION_NOOP: no substantive change' }
+    return original(channel, ...rest)
+  }) as never)
+  const selected = { draftPath: 'ai-novel://draft/1', draftContent: source.content, chapterNumber: 1,
+    sourceDraft: { id: 1, chapterNumber: 1, version: 1, status: 'draft' as const, contentRevision: 1 } }
+  f.fixture.selected = selected
+  await expect(new HumanizeDraftCommand({ ...selected,
+    chapterInfo: { projectPath, chapterNumber: 1, title: '', role: '', purpose: '', keyEvents: '', characters: [] } },
+  f.dependencies).execute(f.args)).rejects.toThrow('模型未对正文做出实质修改')
+  expect(f.writes()).toBe(0)
+  expect(useEditorStore.getState().tabs).toHaveLength(0)
 })
 
 beforeEach(() => {

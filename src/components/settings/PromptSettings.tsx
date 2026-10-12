@@ -46,6 +46,7 @@ const PROMPT_META_EN: Record<string, { name: string; description: string }> = {
   first_chapter_draft: { name: 'First chapter draft', description: 'Generate the complete first chapter' },
   next_chapter_draft: { name: 'Next chapter draft', description: 'Generate the next chapter from context and its blueprint' },
   refine_chapter: { name: 'Chapter revision', description: 'Improve a draft for clarity, craft, and impact' },
+  humanize_draft: { name: 'Remove AI flavor', description: 'Strip AI-generated flavor while preserving plot and facts' },
   consistency_check: { name: 'Consistency review', description: 'Check a chapter for continuity and consistency issues' },
   analyze_writing_style: { name: 'Style analysis', description: 'Extract an actionable style profile from sample text' },
   refine_from_review: { name: 'Review-driven revision', description: 'Revise a draft using findings from a review report' },

@@ -146,7 +146,7 @@ export class ReviewRevisionRuntimeFixture {
       const review = channel === 'review-revision:commit-review'
       const result = await this.backend(review ? 'db:review-create' : 'db:revision-replace-pending', {
         baseDraftId: frozen.source.id, content, expectedSource: frozen.source,
-        ...(review ? {} : { revisionType: frozen.operation === 'refine-draft' ? 'refine' : 'review-fix', wordCount: content.length,
+        ...(review ? {} : { revisionType: frozen.operation === 'refine-from-review' ? 'review-fix' : 'refine', wordCount: content.length,
           ...(frozen.confirmation ? { reviewSourceId: frozen.confirmation.reviewSourceId, userPrompt: frozen.confirmation.snapshot.authorGuidance || undefined } : {}) }),
       }) as { success: boolean; id?: number; reviewIndex?: number; revisionIndex?: number; error?: string; errorCode?: string }
       if (!result.success) throw new Error(result.errorCode === 'SOURCE_DRAFT_CHANGED' ? 'SOURCE_DRAFT_CHANGED' : result.error)

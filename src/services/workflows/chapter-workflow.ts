@@ -63,6 +63,16 @@ export interface RefineOnlyParams {
   userRefinePrompt?: string
 }
 
+export interface HumanizeOnlyParams {
+  projectPath: string
+  chapterNumber: number
+  chapterTitle: string
+  draftPath: string
+  draftContent: string
+  sourceDraft: FrozenDraftSourceIdentity
+  userHumanizePrompt?: string
+}
+
 export interface RefineFromReviewParams {
   projectPath: string
   chapterNumber: number
@@ -393,6 +403,52 @@ export function createRefineOnlyWorkflow(
             chapterNumber: frozenParams.chapterNumber,
             chapterInfo: { projectPath: frozenParams.projectPath, chapterNumber: frozenParams.chapterNumber, title: frozenParams.chapterTitle, role: '', purpose: '', characters: [], keyEvents: '' },
             userRefinePrompt: frozenParams.userRefinePrompt,
+          })
+          return cmd.execute({ step, context, callbacks })
+        },
+      },
+    ],
+    onComplete: { mode: 'open', openResult: async () => { } },
+  }
+}
+
+export function createHumanizeOnlyWorkflow(
+  params: HumanizeOnlyParams,
+  sourceProjectSession: ProjectSessionContext,
+): WorkflowDefinition {
+  const uiLocale = chapterWorkflowLocale()
+  const frozenParams = Object.freeze({
+    ...params,
+    sourceDraft: Object.freeze({ ...params.sourceDraft }),
+  })
+  return {
+    type: 'chapter_creation',
+    projectPath: params.projectPath,
+    projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
+    uiLocale,
+    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    title: localize(uiLocale,
+      `去AI味 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+      `De-AI — Chapter ${params.chapterNumber} ${params.chapterTitle}`,
+    ),
+    steps: [
+      {
+        name: localize(uiLocale, '去AI味', 'Remove AI flavor'),
+        description: localize(
+          uiLocale,
+          '识别并消除章节中的 AI 生成痕迹，在情节与事实不变的前提下保存修订并打开合并视图',
+          'Detect and remove AI-generated flavor while preserving plot and facts, save the revision, and open the merge view',
+        ),
+        executor: async (step, context, callbacks) => {
+          const { HumanizeDraftCommand } = await import('./commands/humanize-draft.command')
+          const cmd = new HumanizeDraftCommand({
+            draftPath: frozenParams.draftPath,
+            draftContent: frozenParams.draftContent,
+            sourceDraft: frozenParams.sourceDraft,
+            chapterNumber: frozenParams.chapterNumber,
+            chapterInfo: { projectPath: frozenParams.projectPath, chapterNumber: frozenParams.chapterNumber, title: frozenParams.chapterTitle, role: '', purpose: '', characters: [], keyEvents: '' },
+            userHumanizePrompt: frozenParams.userHumanizePrompt,
           })
           return cmd.execute({ step, context, callbacks })
         },

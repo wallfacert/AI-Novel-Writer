@@ -321,7 +321,7 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       const contexts = await Promise.all(views.map(async view => ({ view,
         recovery: await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle }),
       })))
-      const reviewContexts = await Promise.allSettled(contexts.filter(item => ['review-chapter', 'refine-draft', 'refine-from-review'].includes(item.recovery.operation))
+      const reviewContexts = await Promise.allSettled(contexts.filter(item => ['review-chapter', 'refine-draft', 'refine-from-review', 'humanize-draft'].includes(item.recovery.operation))
         .map(async ({ view }) => ({ view, recovery: await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: view.handle }) })))
       const agentRoots = new Map(contexts.filter(item => item.recovery.operation === 'agent-round').map(item => [item.view.handle.rootActionId, item.view.handle]))
       const agentContexts = await Promise.allSettled([...agentRoots.values()].map(handle => ipc.invokeWithProjectSession(session, 'agent-generation:read', { handle })))

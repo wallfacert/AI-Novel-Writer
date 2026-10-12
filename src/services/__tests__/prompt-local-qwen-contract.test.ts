@@ -102,6 +102,13 @@ const expectedPromptVariables: Record<string, string[]> = {
     'user_refine_prompt',
     'writing_style',
   ],
+  humanize_draft: [
+    'draft_content',
+    'chapter_info',
+    'global_guidance',
+    'writing_style',
+    'user_refine_prompt',
+  ],
   consistency_check: ['chapter_content', 'character_states', 'global_summary', 'world_building', 'review_focus'],
   analyze_writing_style: ['sample_text'],
   refine_from_review: ['review_report', 'draft_content', 'global_guidance', 'user_refine_prompt'],

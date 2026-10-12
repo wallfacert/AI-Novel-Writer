@@ -6,6 +6,7 @@ import { ipc } from '../ipc-client'
 import { ReviewChapterCommand, canCommitRecoveredReview } from './commands/review-chapter.command'
 import { RefineDraftCommand } from './commands/refine-draft.command'
 import { RefineFromReviewCommand } from './commands/refine-from-review.command'
+import { HumanizeDraftCommand } from './commands/humanize-draft.command'
 
 /** Recover the selected durable action; a saved effect is opened without requesting another model result. */
 export async function createReviewRevisionRecoveryWorkflow(projectSession: ProjectSessionContext,
@@ -13,7 +14,7 @@ export async function createReviewRevisionRecoveryWorkflow(projectSession: Proje
   const session = Object.freeze({ ...projectSession }), handle = Object.freeze({ ...selectedHandle })
   const recovery = await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle })
   const frozen = recovery.context, source = frozen.source
-  if (!['review-chapter', 'refine-draft', 'refine-from-review'].includes(frozen.operation)
+  if (!['review-chapter', 'refine-draft', 'refine-from-review', 'humanize-draft'].includes(frozen.operation)
     || handle.projectId !== session.projectId || recovery.handle.runId !== handle.runId)
     throw new Error('GENERATION_REVIEW_RECOVERY_SCOPE_INVALID')
   if (!recovery.saved && recovery.sourceStatus !== 'current') throw new Error('GENERATION_REVIEW_SOURCE_CHANGED')
@@ -21,11 +22,13 @@ export async function createReviewRevisionRecoveryWorkflow(projectSession: Proje
   const params = { draftPath: formatResourceUri({ kind: 'draft', id: source.id }), draftContent: source.content,
     chapterNumber: source.chapterNumber, recoveryHandle: handle }
   const blueprint = frozen.blueprints.find(item => item.chapterNumber === source.chapterNumber)
+  const chapterInfo = { projectPath: session.projectPath, chapterNumber: source.chapterNumber,
+    title: blueprint?.title ?? '', role: blueprint?.role ?? '', purpose: blueprint?.purpose ?? '',
+    characters: blueprint?.characters ?? [], keyEvents: blueprint?.keyEvents ?? '' }
   const command = frozen.operation === 'review-chapter' ? new ReviewChapterCommand(params)
     : frozen.operation === 'refine-from-review' ? new RefineFromReviewCommand(params)
-      : new RefineDraftCommand({ ...params, chapterInfo: { projectPath: session.projectPath, chapterNumber: source.chapterNumber,
-        title: blueprint?.title ?? '', role: blueprint?.role ?? '', purpose: blueprint?.purpose ?? '',
-        characters: blueprint?.characters ?? [], keyEvents: blueprint?.keyEvents ?? '' } })
+      : frozen.operation === 'humanize-draft' ? new HumanizeDraftCommand({ ...params, chapterInfo })
+        : new RefineDraftCommand({ ...params, chapterInfo })
   const requestsReview = frozen.operation === 'review-chapter' && !recovery.saved && !canCommitRecoveredReview(recovery)
   const name = requestsReview
     ? (frozen.uiLocale === 'en-US' ? `Review chapter ${source.chapterNumber} again` : `重新审稿：第${source.chapterNumber}章`)
