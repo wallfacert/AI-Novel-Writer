@@ -1,8 +1,9 @@
 import { chapterTimeContinuity } from '../../../shared/chapter-time-continuity'
 import { appErrorMessage } from '../../../i18n/app-errors'
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
-import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
+import { draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
+import { classifyDraftRecovery, needsFailedBatchView, planningArtifactIds } from './draft-recovery-plan'
 import { chapterAuthorOutlineBlock } from '../../../shared/chapter-author-outline'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
@@ -559,7 +560,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const knowledgeQueryHint = this.chapterInfo.knowledgeQueryHint?.trim() ?? ''
     const searchQuery = [knowledgeQueryHint, this.chapterInfo.title, this.chapterInfo.keyEvents,
       this.chapterInfo.characters.join(' ')].filter(Boolean).join(' ')
-    const authorInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
+    const expectedAuthorInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
       { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
       { id: 'draft:target-units', text: String(targetChars) }]
     const earlyRecovery = defaultMain && this.resumeHandle
@@ -579,7 +580,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const prepared = defaultMain && !this.resumeHandle
       ? await ipc.invokeWithProjectSession(projectSession, 'generation:prepare-draft-context', {
         chapterNumber: this.chapterInfo.chapterNumber, modelId: context.generationModelId!,
-        promptKeys: [templateKey], skillStages: ['drafting'], authorInputs, query: searchQuery,
+        promptKeys: [templateKey], skillStages: ['drafting'], authorInputs: expectedAuthorInputs, query: searchQuery,
         selectedDraftIds: [...new Set(this.selectedCandidateDrafts.filter(item => item.chapterNumber < this.chapterInfo.chapterNumber).map(item => item.draftId))],
         ...(this.batchId ? { batchId: this.batchId } : {}),
       }).catch(error => {
@@ -912,9 +913,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => this.chapterInfo.chapterNumber + index),
           // S10B 步骤 3：本次准入的脱敏收据随冻结上下文一起进主进程，并被恢复指纹绑定。
           materialDecision,
-          authorInputs: [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
-            { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
-            { id: 'draft:target-units', text: String(targetChars) }],
+          authorInputs: expectedAuthorInputs,
           ...(this.resumeHandle ? { resumeHandle: this.resumeHandle } : {}),
         } })
         mainOwned = (runtime as { mainOwned?: boolean }).mainOwned === true
@@ -924,42 +923,26 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             : null
           if (recovery?.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
           if (this.resumeHandle && !mainOwned) throw new Error('GENERATION_DRAFT_LEGACY_RESUME_REFUSED')
-          let reconciliationArtifactIds = new Set([...(recovery?.draftReconciliation?.artifactIds ?? []), ...(recovery?.draftShortOutline?.artifactIds ?? [])])
-          const retryOutline = recovery?.draftShortOutline?.retry?.kind === 'available'
-          const outlinedOnly = !!recovery?.draftShortOutline?.completedOutput && !recovery.composition
-            && recovery.attemptedPurposes.every(purpose => purpose === DRAFT_SHORT_OUTLINE_PURPOSE)
-          // 对账已完成而首稿尚未发出（如进程在两者之间中断）：沿用记录的对账结果直接生成首稿。
-          const reconciledOnly = !!recovery && !recovery.composition && recovery.draftSave.kind === 'absent' && recovery.attemptedPurposes.length > 0
-            && recovery.attemptedPurposes.every(purpose => purpose === DRAFT_RECONCILE_PURPOSE)
-          const failedBatchView = recovery && this.batchId && recovery.batchId === this.batchId
-            && !recovery.composition && recovery.draftSave.kind === 'absent' && recovery.lastCompositionFinishReason === null
-            && recovery.attemptedPurposes.at(-1) === 'chapter-draft'
+          let reconciliationArtifactIds = new Set(planningArtifactIds(recovery))
+          const failedBatchView = needsFailedBatchView(recovery, this.batchId)
             ? await ipc.invokeWithProjectSession(projectSession, 'generation:read', this.resumeHandle!) : null
-          const lastAttempt = failedBatchView?.budgetDiagnostics?.at(-1)
-          const retryFailedBatch = !!failedBatchView && failedBatchView.status === 'running' && !failedBatchView.nonReplayable
-            && failedBatchView.handle.runId === this.resumeHandle?.runId && (failedBatchView.ledger?.physicalRequests ?? 0) > 0
-            && !failedBatchView.ledger?.blockedCode && lastAttempt?.finishReason === null
-            && (lastAttempt.failureCode === 'GENERATION_PROVIDER_FAILED' || lastAttempt.failureCode === 'NETWORK_ERROR')
-            && ![...failedBatchView.artifacts, ...(failedBatchView.candidates ?? [])].some(artifact => !reconciliationArtifactIds.has(artifact.artifactId) && artifact.text.trim())
-            && !failedBatchView.unsavedTails?.some(tail => tail.text.trim())
-          if (recovery && (recovery.operation !== 'chapter-draft'
-            || recovery.chapterNumber !== this.chapterInfo.chapterNumber
-            || !retryOutline && !retryFailedBatch && !reconciledOnly && !outlinedOnly && (!recovery.composition || !isDraftVisibleTextVersion(recovery.composition.algorithm)
-              || !['stop', 'length'].includes(recovery.lastCompositionFinishReason ?? ''))))
-            throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
+          // 恢复准入的唯一裁决点：模式、拒绝码与检查顺序都在 classifyDraftRecovery 里表驱动。
+          const plan = classifyDraftRecovery({
+            recovery,
+            failedBatchView,
+            expected: {
+              chapterNumber: this.chapterInfo.chapterNumber,
+              ...(this.batchId ? { batchId: this.batchId } : {}),
+              ...(this.resumeHandle ? { resumeRunId: this.resumeHandle.runId } : {}),
+              authorInputs: expectedAuthorInputs,
+              selectedDraftIds: selectedCandidateDrafts.map(item => item.draftId),
+              selectedFinalizedDraftIds: chapterMaterials.consumedFinalizedSources.map(item => item.draftId),
+              selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => this.chapterInfo.chapterNumber + index),
+            },
+          })
+          if (plan.kind === 'rejected') throw new Error(plan.code)
           if (recovery?.composition && isDraftVisibleTextVersion(recovery.composition.algorithm))
             compositionVersion = recovery.composition.algorithm
-          const expectedInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
-            { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
-            { id: 'draft:target-units', text: String(targetChars) }]
-          const recoveredAuthorInputs = recovery?.authorInputs
-          if (recoveredAuthorInputs && expectedInputs.some(input => recoveredAuthorInputs.find(item => item.id === input.id)?.text !== input.text))
-            throw new Error('GENERATION_DRAFT_RECOVERY_AUTHOR_INPUT_CHANGED')
-          const sameIds = (a: readonly number[], b: readonly number[]) => JSON.stringify([...new Set(a)].sort((a, b) => a - b)) === JSON.stringify([...new Set(b)].sort((a, b) => a - b))
-          if (recovery && (!sameIds(recovery.selectedDraftIds, selectedCandidateDrafts.map(item => item.draftId))
-            || !sameIds(recovery.selectedFinalizedDraftIds, chapterMaterials.consumedFinalizedSources.map(item => item.draftId))
-            || !sameIds(recovery.selectedBlueprintChapterNumbers, Array.from({ length: 6 }, (_, index) => this.chapterInfo.chapterNumber + index))))
-            throw new Error('GENERATION_DRAFT_RECOVERY_SOURCE_SELECTION_CHANGED')
           let acknowledgedIds: string[] = [...(recovery?.composition?.artifactIds ?? [])]
           acknowledgedPreview = recovery?.composition?.text ?? ''
           const acknowledge = async (outcome: GenerationOutcome, text: string) => {
@@ -987,11 +970,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           }
           const recordedReconciliation = recovery?.draftReconciliation?.completedOutput
           let shortOutline = recovery?.draftShortOutline?.completedOutput ?? ''
-          if (recovery?.draftShortOutline?.retry?.kind === 'available') {
+          // plan 为 retry-outline 时分类器已保证 retry 可用；这里再收窄一次只为类型与取值。
+          const outlineRetry = plan.kind === 'retry-outline' ? recovery?.draftShortOutline?.retry : undefined
+          if (outlineRetry?.kind === 'available') {
             this.assertNotCancelled(context)
             callbacks.log(uiText('重新生成短细纲...', 'Retrying the short chapter outline...'))
             const retried = await ipc.invokeWithProjectSession(projectSession, 'generation:retry-draft-short-outline', {
-              handle: context.mainGenerationRunHandle!, failedAttemptId: recovery.draftShortOutline.retry.failedAttemptId,
+              handle: context.mainGenerationRunHandle!, failedAttemptId: outlineRetry.failedAttemptId,
             })
             if (retried.outcome.status !== 'completed' || retried.outcome.finishReason !== 'stop' || !retried.outcome.content.trim())
               throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
@@ -1001,10 +986,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             if (shortOutline !== retried.outcome.content || !retried.outcome.receipt.visibleArtifact
               || !recovery.draftShortOutline?.artifactIds.includes(retried.outcome.receipt.visibleArtifact.artifactId))
               throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
-            reconciliationArtifactIds = new Set([...(recovery.draftReconciliation?.artifactIds ?? []), ...recovery.draftShortOutline.artifactIds])
+            reconciliationArtifactIds = new Set(planningArtifactIds(recovery))
             logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, retried.outcome.receipt)
           }
-          if (!recovery && !authorOutline) {
+          if (plan.kind === 'fresh' && !authorOutline) {
             callbacks.log(uiText('生成短细纲...', 'Generating a short chapter outline...'))
             const outlined = await draftingSession.complete({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text',
               reasoningStage: 'planning', budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: 500, segmentable: false },
