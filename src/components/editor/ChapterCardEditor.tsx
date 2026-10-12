@@ -43,6 +43,7 @@ import { captureProjectSession, isProjectSessionCurrent } from '../project-sessi
 import { openPlanningRecoveryDraft, registerEditorExitSaveHandler, useEditorStore, type EditorTab, type PlanningRecoverySaveSnapshot } from '../../stores/editor-store'
 import type { GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import CodeMirrorEditor from './CodeMirrorEditor'
+import CharacterGridPicker from './CharacterGridPicker'
 import { requireIpcSuccess } from '../../services/ipc-result'
 import {
   CHAPTER_CARD_TAB_ID,
@@ -1202,11 +1203,11 @@ function ChapterCardEditorSession({
                     </NativeSelect>
                   </div>
                   <div>
-                    <Label>{text('出场关键人（逗号分隔）', 'Key characters (comma-separated)')}</Label>
-                    <Input
-                      value={selected.characters.join('、')}
-                      onChange={e => updateField('characters', e.target.value.split(/[,，、\s]+/).filter(Boolean))}
-                      placeholder={text('如：主角、反派A', 'For example: protagonist, antagonist A')}
+                    <Label>{text('出场关键人物', 'Key characters')}</Label>
+                    <CharacterGridPicker
+                      value={selected.characters}
+                      onChange={names => updateField('characters', names)}
+                      projectSession={dataProjectSession}
                     />
                   </div>
                 </div>
