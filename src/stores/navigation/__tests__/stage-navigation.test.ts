@@ -9,7 +9,7 @@ import { navigate } from '../navigation-intents'
 import { useStageStore } from '../stage-store'
 
 const PROJECT_PATH = 'C:\\novels\\stage'
-const WRITE = { title: '夜雨', role: '发展', purpose: '交代来信', keyEvents: '收到密信', characters: '林岚', userGuidance: '' }
+const WRITE = { title: '夜雨', role: '发展', purpose: '交代来信', keyEvents: '收到密信', characters: '林岚', userGuidance: '', chapterOutline: '' }
 
 const originalAppearance = useAppearanceStore.getState()
 const originalLayout = useLayoutStore.getState()

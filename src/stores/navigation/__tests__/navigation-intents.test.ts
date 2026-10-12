@@ -29,11 +29,12 @@ const START: LayoutFields = {
   importNovelOpen: false,
   chapterCreationOpen: false,
   chapterCreationPrefill: null,
+  directChapterImportOpen: false,
 }
 
 const EXITED = { immersive: false, preImmersivePanels: null }
 
-const WRITE = { title: '夜雨', role: '发展', purpose: '交代来信', keyEvents: '收到密信', characters: '林岚', userGuidance: '' }
+const WRITE = { title: '夜雨', role: '发展', purpose: '交代来信', keyEvents: '收到密信', characters: '林岚', userGuidance: '', chapterOutline: '' }
 
 function layoutFields(): Partial<LayoutFields> {
   const state = useLayoutStore.getState()

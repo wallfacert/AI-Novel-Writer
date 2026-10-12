@@ -8,6 +8,7 @@ export interface NextChapterBlueprint {
   keyEvents: string
   characters: string[]
   userGuidance: string
+  chapterOutline?: string
 }
 
 /**
@@ -31,5 +32,6 @@ export function getAutoNextChapterPrefill(
     keyEvents: blueprint.keyEvents,
     characters: blueprint.characters.join('、'),
     userGuidance: blueprint.userGuidance || '',
+    chapterOutline: blueprint.chapterOutline || '',
   }
 }

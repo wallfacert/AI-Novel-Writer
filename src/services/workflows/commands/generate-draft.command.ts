@@ -1,8 +1,10 @@
 import { chapterTimeContinuity } from '../../../shared/chapter-time-continuity'
 import { appErrorMessage } from '../../../i18n/app-errors'
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
-import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
+import { draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
+import { classifyDraftRecovery, needsFailedBatchView, planningArtifactIds } from './draft-recovery-plan'
+import { chapterAuthorOutlineBlock } from '../../../shared/chapter-author-outline'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
@@ -254,6 +256,7 @@ type WriterChapterInfo = Pick<ChapterInfo,
   | 'keyEvents'
   | 'suspenseHook'
   | 'userGuidance'
+  | 'chapterOutline'
 >
 
 /** Keep workflow metadata out of both initial and continuation writer prompts. */
@@ -267,7 +270,13 @@ function toWriterChapterInfo(chapterInfo: ChapterInfo): WriterChapterInfo {
     keyEvents: chapterInfo.keyEvents,
     suspenseHook: chapterInfo.suspenseHook,
     userGuidance: chapterInfo.userGuidance,
+    chapterOutline: chapterInfo.chapterOutline,
   }
+}
+
+/** 作者大纲非空时优先生效：跳过自动短细纲，正文按作者大纲推进。 */
+function authorChapterOutline(chapterInfo: WriterChapterInfo): string {
+  return chapterInfo.chapterOutline?.trim() || ''
 }
 
 function hasSubstantialPreviousChapterReuse(
@@ -438,6 +447,10 @@ function draftAuthorMaterialBlock(writingLanguage: WritingLanguage, material: {
   reconciliation?: string
 }): string {
   const reconciliation = material.reconciliation ? `${material.reconciliation}\n\n` : ''
+  // 作者大纲在续写与压缩轮次保持与首稿相同的强化框架；否则长章后半段只剩
+  // 蓝图 JSON 里的一个普通字段，大纲约束最容易在这里松弛。
+  const authorOutline = authorChapterOutline(material.chapterInfo)
+  const authorOutlineSuffix = authorOutline ? `\n\n${chapterAuthorOutlineBlock(writingLanguage, authorOutline)}` : ''
   return promptLanguageText(
     writingLanguage,
     `【本章蓝图】
@@ -458,7 +471,7 @@ ${material.novelConfigFacts}
 
 ${material.chapterMaterials}
 
-${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo).authorItems}`,
+${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo).authorItems}${authorOutlineSuffix}`,
     `[Current chapter blueprint]
 ${JSON.stringify(material.chapterInfo, null, 2)}
 
@@ -477,7 +490,7 @@ ${material.novelConfigFacts}
 
 ${material.chapterMaterials}
 
-${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo).authorItems}`,
+${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo).authorItems}${authorOutlineSuffix}`,
   )
 }
 
@@ -546,7 +559,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const knowledgeQueryHint = this.chapterInfo.knowledgeQueryHint?.trim() ?? ''
     const searchQuery = [knowledgeQueryHint, this.chapterInfo.title, this.chapterInfo.keyEvents,
       this.chapterInfo.characters.join(' ')].filter(Boolean).join(' ')
-    const authorInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
+    const expectedAuthorInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
       { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
       { id: 'draft:target-units', text: String(targetChars) }]
     const earlyRecovery = defaultMain && this.resumeHandle
@@ -566,7 +579,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const prepared = defaultMain && !this.resumeHandle
       ? await ipc.invokeWithProjectSession(projectSession, 'generation:prepare-draft-context', {
         chapterNumber: this.chapterInfo.chapterNumber, modelId: context.generationModelId!,
-        promptKeys: [templateKey], skillStages: ['drafting'], authorInputs, query: searchQuery,
+        promptKeys: [templateKey], skillStages: ['drafting'], authorInputs: expectedAuthorInputs, query: searchQuery,
         selectedDraftIds: [...new Set(this.selectedCandidateDrafts.filter(item => item.chapterNumber < this.chapterInfo.chapterNumber).map(item => item.draftId))],
         ...(this.batchId ? { batchId: this.batchId } : {}),
       }).catch(error => {
@@ -830,11 +843,16 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       .filter(Boolean)
       .join('\n\n')
     const prompt = composeInitialPrompt('')
+    const authorOutline = authorChapterOutline(writerChapterInfo)
     const outlinePrompt = draftShortOutlinePrompt(writingLanguage, prompt)
+    const authorOutlineBlockText = authorOutline ? chapterAuthorOutlineBlock(writingLanguage, authorOutline) : ''
+    // 作者大纲优先时首个正文提示已含作者大纲块；主进程按整段用户消息校验 promptHash，
+    // 因此收据哈希必须覆盖含大纲块的完整提示（无大纲时保持仅基座提示，由主进程剥离生成计划块）。
+    const receiptPrompt = authorOutline ? `${prompt}\n\n${authorOutlineBlockText}` : prompt
     const withSkill = (content: string) => injectWritingSkillIntoTask({ purpose: 'chapter-draft', output: 'visible-text',
       messages: [{ role: 'user', content }] }, context, 'drafting').task.messages[0]!.content
-    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(withSkill(prompt)),
-      ...(!this.resumeHandle ? { shortOutlinePromptHash: await hashAuthorText(withSkill(outlinePrompt)) } : {}) }
+    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(withSkill(receiptPrompt)),
+      ...(!this.resumeHandle && !authorOutline ? { shortOutlinePromptHash: await hashAuthorText(withSkill(outlinePrompt)) } : {}) }
     const previousEnding = chapterMaterials.previousEnding
 
     callbacks.log(uiText(
@@ -891,9 +909,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => this.chapterInfo.chapterNumber + index),
           // S10B 步骤 3：本次准入的脱敏收据随冻结上下文一起进主进程，并被恢复指纹绑定。
           materialDecision,
-          authorInputs: [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
-            { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
-            { id: 'draft:target-units', text: String(targetChars) }],
+          authorInputs: expectedAuthorInputs,
           ...(this.resumeHandle ? { resumeHandle: this.resumeHandle } : {}),
         } })
         mainOwned = (runtime as { mainOwned?: boolean }).mainOwned === true
@@ -903,42 +919,26 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             : null
           if (recovery?.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
           if (this.resumeHandle && !mainOwned) throw new Error('GENERATION_DRAFT_LEGACY_RESUME_REFUSED')
-          let reconciliationArtifactIds = new Set([...(recovery?.draftReconciliation?.artifactIds ?? []), ...(recovery?.draftShortOutline?.artifactIds ?? [])])
-          const retryOutline = recovery?.draftShortOutline?.retry?.kind === 'available'
-          const outlinedOnly = !!recovery?.draftShortOutline?.completedOutput && !recovery.composition
-            && recovery.attemptedPurposes.every(purpose => purpose === DRAFT_SHORT_OUTLINE_PURPOSE)
-          // 对账已完成而首稿尚未发出（如进程在两者之间中断）：沿用记录的对账结果直接生成首稿。
-          const reconciledOnly = !!recovery && !recovery.composition && recovery.draftSave.kind === 'absent' && recovery.attemptedPurposes.length > 0
-            && recovery.attemptedPurposes.every(purpose => purpose === DRAFT_RECONCILE_PURPOSE)
-          const failedBatchView = recovery && this.batchId && recovery.batchId === this.batchId
-            && !recovery.composition && recovery.draftSave.kind === 'absent' && recovery.lastCompositionFinishReason === null
-            && recovery.attemptedPurposes.at(-1) === 'chapter-draft'
+          let reconciliationArtifactIds = new Set(planningArtifactIds(recovery))
+          const failedBatchView = needsFailedBatchView(recovery, this.batchId)
             ? await ipc.invokeWithProjectSession(projectSession, 'generation:read', this.resumeHandle!) : null
-          const lastAttempt = failedBatchView?.budgetDiagnostics?.at(-1)
-          const retryFailedBatch = !!failedBatchView && failedBatchView.status === 'running' && !failedBatchView.nonReplayable
-            && failedBatchView.handle.runId === this.resumeHandle?.runId && (failedBatchView.ledger?.physicalRequests ?? 0) > 0
-            && !failedBatchView.ledger?.blockedCode && lastAttempt?.finishReason === null
-            && (lastAttempt.failureCode === 'GENERATION_PROVIDER_FAILED' || lastAttempt.failureCode === 'NETWORK_ERROR')
-            && ![...failedBatchView.artifacts, ...(failedBatchView.candidates ?? [])].some(artifact => !reconciliationArtifactIds.has(artifact.artifactId) && artifact.text.trim())
-            && !failedBatchView.unsavedTails?.some(tail => tail.text.trim())
-          if (recovery && (recovery.operation !== 'chapter-draft'
-            || recovery.chapterNumber !== this.chapterInfo.chapterNumber
-            || !retryOutline && !retryFailedBatch && !reconciledOnly && !outlinedOnly && (!recovery.composition || !isDraftVisibleTextVersion(recovery.composition.algorithm)
-              || !['stop', 'length'].includes(recovery.lastCompositionFinishReason ?? ''))))
-            throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
+          // 恢复准入的唯一裁决点：模式、拒绝码与检查顺序都在 classifyDraftRecovery 里表驱动。
+          const plan = classifyDraftRecovery({
+            recovery,
+            failedBatchView,
+            expected: {
+              chapterNumber: this.chapterInfo.chapterNumber,
+              ...(this.batchId ? { batchId: this.batchId } : {}),
+              ...(this.resumeHandle ? { resumeRunId: this.resumeHandle.runId } : {}),
+              authorInputs: expectedAuthorInputs,
+              selectedDraftIds: selectedCandidateDrafts.map(item => item.draftId),
+              selectedFinalizedDraftIds: chapterMaterials.consumedFinalizedSources.map(item => item.draftId),
+              selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => this.chapterInfo.chapterNumber + index),
+            },
+          })
+          if (plan.kind === 'rejected') throw new Error(plan.code)
           if (recovery?.composition && isDraftVisibleTextVersion(recovery.composition.algorithm))
             compositionVersion = recovery.composition.algorithm
-          const expectedInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
-            { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
-            { id: 'draft:target-units', text: String(targetChars) }]
-          const recoveredAuthorInputs = recovery?.authorInputs
-          if (recoveredAuthorInputs && expectedInputs.some(input => recoveredAuthorInputs.find(item => item.id === input.id)?.text !== input.text))
-            throw new Error('GENERATION_DRAFT_RECOVERY_AUTHOR_INPUT_CHANGED')
-          const sameIds = (a: readonly number[], b: readonly number[]) => JSON.stringify([...new Set(a)].sort((a, b) => a - b)) === JSON.stringify([...new Set(b)].sort((a, b) => a - b))
-          if (recovery && (!sameIds(recovery.selectedDraftIds, selectedCandidateDrafts.map(item => item.draftId))
-            || !sameIds(recovery.selectedFinalizedDraftIds, chapterMaterials.consumedFinalizedSources.map(item => item.draftId))
-            || !sameIds(recovery.selectedBlueprintChapterNumbers, Array.from({ length: 6 }, (_, index) => this.chapterInfo.chapterNumber + index))))
-            throw new Error('GENERATION_DRAFT_RECOVERY_SOURCE_SELECTION_CHANGED')
           let acknowledgedIds: string[] = [...(recovery?.composition?.artifactIds ?? [])]
           acknowledgedPreview = recovery?.composition?.text ?? ''
           const acknowledge = async (outcome: GenerationOutcome, text: string) => {
@@ -967,7 +967,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           const recordedReconciliation = recovery?.draftReconciliation?.completedOutput
           let shortOutline = recovery?.draftShortOutline?.completedOutput ?? ''
           let outlined: GenerationOutcome | undefined
-          if (!recovery) {
+          if (plan.kind === 'fresh' && !authorOutline) {
             callbacks.log(uiText('生成短细纲...', 'Generating a short chapter outline...'))
             outlined = await draftingSession.complete({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text',
               reasoningStage: 'planning', budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: 500, segmentable: false },
@@ -995,7 +995,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
               if (shortOutline !== outlined.content || !outlined.receipt.visibleArtifact
                 || !recovery.draftShortOutline?.artifactIds.includes(outlined.receipt.visibleArtifact.artifactId))
                 throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
-              reconciliationArtifactIds = new Set([...(recovery.draftReconciliation?.artifactIds ?? []), ...recovery.draftShortOutline.artifactIds])
+              reconciliationArtifactIds = new Set(planningArtifactIds(recovery))
             }
           }
           if (outlined && (outlined.status !== 'completed' || outlined.finishReason !== 'stop' || !outlined.content.trim())) {
@@ -1010,7 +1010,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           if (recovery?.draftShortOutline && !shortOutline) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
           const reconciliationBlock = [recordedReconciliation ? draftReconciliationBlock(writingLanguage, recordedReconciliation) : '',
             shortOutline ? draftShortOutlineBlock(writingLanguage, shortOutline) : ''].filter(Boolean).join('\n\n')
-          const initialPrompt = shortOutline ? `${prompt}\n\n${draftShortOutlineBlock(writingLanguage, shortOutline)}`
+          // 作者大纲优先：直接以作者事实块注入并跳过自动短细纲；无作者大纲时沿用生成计划块。
+          const initialPrompt = authorOutline ? `${prompt}\n\n${authorOutlineBlockText}`
+            : shortOutline ? `${prompt}\n\n${draftShortOutlineBlock(writingLanguage, shortOutline)}`
             : composeInitialPrompt(reconciliationBlock)
           const originalDraftTask = recovery?.draftShortOutline?.initialDraftTask
           if (recovery?.draftShortOutline && (recovery.draftShortOutline.promptHash !== await hashAuthorText(withSkill(outlinePrompt))

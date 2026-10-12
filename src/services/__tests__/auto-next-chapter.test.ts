@@ -21,6 +21,7 @@ describe('getAutoNextChapterPrefill', () => {
       keyEvents: '收到密信',
       characters: '林舟、苏雨',
       userGuidance: '保留悬念',
+      chapterOutline: '',
     })
   })
 

@@ -23,6 +23,8 @@ export type ChapterWritePrefill = {
   keyEvents: string
   characters: string
   userGuidance: string
+  /** 作者写好的本章场景大纲，胜过自动短大纲 */
+  chapterOutline: string
 }
 
 /** 章节创建对话框的预填参数 */
@@ -67,6 +69,8 @@ export interface LayoutFields {
   chapterCreationOpen: boolean
   /** 章节创建对话框的预填参数 */
   chapterCreationPrefill: ChapterCreationPrefill
+  /** 直接新增章节（粘贴导入草稿）对话框是否打开 */
+  directChapterImportOpen: boolean
 }
 
 interface LayoutState extends LayoutFields {
@@ -93,6 +97,8 @@ interface LayoutState extends LayoutFields {
   openImportNovel: () => void
   closeImportNovel: () => void
   closeChapterCreation: () => void
+  openDirectChapterImport: () => void
+  closeDirectChapterImport: () => void
 }
 
 export const useLayoutStore = create<LayoutState>()((set, get) => ({
@@ -121,6 +127,7 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
   importNovelOpen: false,
   chapterCreationOpen: false,
   chapterCreationPrefill: null,
+  directChapterImportOpen: false,
 
   // Actions
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen, immersive: false, preImmersivePanels: null })),
@@ -185,4 +192,6 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
   openImportNovel: () => set({ importNovelOpen: true }),
   closeImportNovel: () => set({ importNovelOpen: false }),
   closeChapterCreation: () => set({ chapterCreationOpen: false, chapterCreationPrefill: null }),
+  openDirectChapterImport: () => set({ directChapterImportOpen: true }),
+  closeDirectChapterImport: () => set({ directChapterImportOpen: false }),
 }))
