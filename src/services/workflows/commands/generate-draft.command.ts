@@ -64,7 +64,6 @@ import type { DraftSourceDependency } from '../../../shared/draft-source-depende
 export { countDraftUnits } from '../../../shared/draft-units'
 export { previousChapterEnding } from '../chapter-materials'
 
-const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const NEXT_CHAPTER_HEAD_MAX_CHARS = 1200
 const CROSS_CHAPTER_REUSE_CJK_NGRAM_CHARS = 8
@@ -807,7 +806,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         ],
       })
     } catch (error) {
-      // 必需材料（作者资料/角色档案/后续计划）超出容量：显式失败，绝不静默裁掉。
       if (!(error instanceof ChapterMaterialCapacityError)) throw error
       const blocked = error.decision.decision === 'capacity-conflict'
         ? `${error.decision.blockingSourceId}:${error.decision.blockingReason}`
@@ -817,8 +815,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `  Required material exceeds the context capacity (${error.decision.decision}): ${blocked}`,
       ))
       throw new Error(uiText(
-        '本章必需材料（作者资料、角色档案、后续计划）超出上下文容量，已停止生成。请精简这些内容后重试。',
-        'The required material for this chapter (author facts, character profiles, future plans) exceeds the context capacity, so generation stopped. Trim it and try again.',
+        '本章必需材料（作者资料、角色档案、后续计划、上一章正文）超出上下文容量，已停止生成。请精简这些内容后重试。',
+        'The required material for this chapter (author facts, character profiles, future plans, previous chapter prose) exceeds the context capacity, so generation stopped. Trim it and try again.',
       ))
     }
     const admittedCandidateSourceIds = new Set(chapterMaterials.selection.included
@@ -827,8 +825,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     if (selectedCandidateDrafts.length > 0 && admittedCandidateSourceIds.size === 0) {
       throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
     }
-    // 无未定稿候选时上一章原文只经直接前驱的定稿块（整块或降级后的结尾）到达模型：
-    // 来源存在不等于模型收到了它，未被选入提示词就不得开始生成。
     if (selectedCandidateDrafts.length === 0 && requiredFinalizedSource
       && !chapterMaterials.selection.included.some(material => material.ref.sourceId === `finalized:${requiredFinalizedSource.draftId}`)) {
       throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
@@ -970,34 +966,46 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           }
           const recordedReconciliation = recovery?.draftReconciliation?.completedOutput
           let shortOutline = recovery?.draftShortOutline?.completedOutput ?? ''
-          // plan 为 retry-outline 时分类器已保证 retry 可用；这里再收窄一次只为类型与取值。
-          const outlineRetry = plan.kind === 'retry-outline' ? recovery?.draftShortOutline?.retry : undefined
-          if (outlineRetry?.kind === 'available') {
+          let outlined: GenerationOutcome | undefined
+          if (plan.kind === 'fresh' && !authorOutline) {
+            callbacks.log(uiText('生成短细纲...', 'Generating a short chapter outline...'))
+            outlined = await draftingSession.complete({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text',
+              reasoningStage: 'planning', budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: 500, segmentable: false },
+              messages: [{ role: 'user', content: outlinePrompt }] }, { signal: cancellation.signal })
+            logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, outlined.receipt)
+            if (outlined.status === 'completed' && outlined.finishReason === 'stop' && outlined.content.trim()) {
+              shortOutline = outlined.content
+            } else if (mainOwned) {
+              recovery = await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
+              if (recovery.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
+            }
+          }
+          if (recovery?.draftShortOutline?.retry?.kind === 'available') {
             this.assertNotCancelled(context)
             callbacks.log(uiText('重新生成短细纲...', 'Retrying the short chapter outline...'))
             const retried = await ipc.invokeWithProjectSession(projectSession, 'generation:retry-draft-short-outline', {
-              handle: context.mainGenerationRunHandle!, failedAttemptId: outlineRetry.failedAttemptId,
+              handle: context.mainGenerationRunHandle!, failedAttemptId: recovery.draftShortOutline.retry.failedAttemptId,
             })
-            if (retried.outcome.status !== 'completed' || retried.outcome.finishReason !== 'stop' || !retried.outcome.content.trim())
-              throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
-            recovery = await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
-            if (recovery.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
-            shortOutline = recovery.draftShortOutline?.completedOutput ?? ''
-            if (shortOutline !== retried.outcome.content || !retried.outcome.receipt.visibleArtifact
-              || !recovery.draftShortOutline?.artifactIds.includes(retried.outcome.receipt.visibleArtifact.artifactId))
-              throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
-            reconciliationArtifactIds = new Set(planningArtifactIds(recovery))
-            logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, retried.outcome.receipt)
-          }
-          if (plan.kind === 'fresh' && !authorOutline) {
-            callbacks.log(uiText('生成短细纲...', 'Generating a short chapter outline...'))
-            const outlined = await draftingSession.complete({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text',
-              reasoningStage: 'planning', budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: 500, segmentable: false },
-              messages: [{ role: 'user', content: outlinePrompt }] }, { signal: cancellation.signal })
-            if (outlined.status !== 'completed' || outlined.finishReason !== 'stop' || !outlined.content.trim())
-              throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
-            shortOutline = outlined.content
+            outlined = retried.outcome
             logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, outlined.receipt)
+            if (outlined.status === 'completed' && outlined.finishReason === 'stop' && outlined.content.trim()) {
+              recovery = await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
+              if (recovery.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
+              shortOutline = recovery.draftShortOutline?.completedOutput ?? ''
+              if (shortOutline !== outlined.content || !outlined.receipt.visibleArtifact
+                || !recovery.draftShortOutline?.artifactIds.includes(outlined.receipt.visibleArtifact.artifactId))
+                throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
+              reconciliationArtifactIds = new Set(planningArtifactIds(recovery))
+            }
+          }
+          if (outlined && (outlined.status !== 'completed' || outlined.finishReason !== 'stop' || !outlined.content.trim())) {
+            const reason = outlined.finishReason === 'length'
+              ? uiText('模型输出被截断', 'the model output was truncated')
+              : !outlined.content.trim() ? uiText('模型未返回可见内容', 'the model returned no visible content')
+                : uiText('模型未正常完成输出', 'the model did not complete the output normally')
+            throw new Error(uiText(`短细纲生成失败：${reason}。正文尚未开始。`,
+              `The short chapter outline failed: ${reason}. Drafting has not started.`)
+              + ` (GENERATION_DRAFT_SHORT_OUTLINE_FAILED; status=${outlined.status}; finishReason=${outlined.finishReason})`)
           }
           if (recovery?.draftShortOutline && !shortOutline) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
           const reconciliationBlock = [recordedReconciliation ? draftReconciliationBlock(writingLanguage, recordedReconciliation) : '',
@@ -1418,7 +1426,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const remaining = Math.max(0, params.targetChars - currentChars)
       const ceiling = Math.max(0, range.maximum - currentChars)
       const allowance = remaining > 0 ? Math.min(remaining, ceiling) : Math.min(150, ceiling)
-      const visibleTail = sanitizeDraftText(draft, params.compositionVersion).slice(-CONTINUE_PROMPT_MAX_CHARS)
+      const visibleDraft = sanitizeDraftText(draft, params.compositionVersion)
       const recoveryInstruction = recoveryPending
         ? promptLanguageText(
             params.writingLanguage,
@@ -1447,7 +1455,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
 【硬性要求】
 - 只输出新增正文，不要复述已写内容。
-- 从“已写正文末尾”自然接下去，保持同一场景逻辑或合理转场。
+- 根据下方本章已写正文全文，从末尾自然接下去，保持同一场景逻辑或合理转场。
 ${lengthInstruction}
 - 不要输出标题、解释、总结、Markdown、思考过程或“点我继续”。
 - 避免重复已写正文中的整句、整段、动作链和意象。
@@ -1457,13 +1465,13 @@ ${lengthContract}
 
 ${authorMaterial}
 
-【已写正文末尾】
-${visibleTail}`,
+【本章已写正文全文】
+${visibleDraft}`,
         `${recoveryInstruction}Continue the current chapter seamlessly.
 
 [Requirements]
 - Output only new manuscript prose; do not repeat existing text.
-- Continue naturally from the existing ending, preserving the same scene logic or making a justified transition.
+- Read the full existing manuscript below and continue naturally from its ending, preserving the same scene logic or making a justified transition.
 ${lengthInstruction}
 - Do not output a title, explanation, summary, Markdown, reasoning, or an interface continuation prompt.
 - Avoid repeating complete sentences, paragraphs, action sequences, or imagery from the existing manuscript.
@@ -1473,8 +1481,8 @@ ${lengthContract}
 
 ${authorMaterial}
 
-[End of existing manuscript]
-${visibleTail}`,
+[Full existing manuscript for this chapter]
+${visibleDraft}`,
       )
 
       const preview = createDraftStreamPreview(

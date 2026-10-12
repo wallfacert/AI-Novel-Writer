@@ -4703,7 +4703,8 @@ test('实际SQLite唯一dispatch须匹配原handle、项目epoch与实际输出�
   } finally { db.close() }
 })
 
-test('campaign保留后续阶段计划分配，unknown与修复超出原22仍继续记账且不能换账', () => {
+// This integration case performs 78 durable appends; Intel macOS qualification took 6.8s.
+test('campaign保留后续阶段计划分配，unknown与修复超出原22仍继续记账且不能换账', { timeout: 20_000 }, () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/campaign-test-'))
   const file = path.join(dir, 'synthetic-ledger.jsonl')
   const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', ...protocolBinding, arm: 'baseline', codeSha: 'a'.repeat(40),
@@ -4806,6 +4807,42 @@ test('协议revision和hash绑定新目标与新reserve，历史账本仅按冻�
     assert.throws(() => validateHistoricalLedgerBoundary(raw.slice(0, firstLineEnd) + '\n' + raw.slice(firstLineEnd), boundary), /BOUNDARY_DRIFT/)
     assert.throws(() => validateHistoricalLedgerBoundary(raw, { ...boundary, finalReserveAttemptIds: ['missing'] }), /EVIDENCE_MISSING/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('账本协议读取不随历史记录增长，下一次写入仍检查协议漂移', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/protocol-snapshot-'))
+  const file = path.join(dir, 'synthetic-ledger.jsonl')
+  const protocolFile = path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')
+  const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', ...protocolBinding, arm: 'baseline',
+    codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+    phase: 'early-context', milestone: 'early', caseId: '场景2/3', operation: '长设定第三章正文' }
+  const readFileSync = fs.readFileSync
+  let reads = 0, changed = false
+  const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((target, options) => {
+    const bytes = readFileSync(target, options)
+    if (target !== protocolFile) return bytes
+    reads++
+    return changed ? typeof bytes === 'string' ? bytes + '\n' : Buffer.concat([bytes, Buffer.from('\n')]) : bytes
+  })
+  try {
+    const readsPerUpdate = []
+    for (let index = 0; index < 3; index++) {
+      reads = 0
+      updateLedger(file, { type: 'reserve', attemptId: `attempt-${index}`, binding }, { campaignMode: 'synthetic' })
+      readsPerUpdate.push(reads)
+    }
+    assert.ok(readsPerUpdate[0] > 0, '每次写入必须读取当前协议')
+    assert.deepEqual(readsPerUpdate, Array(3).fill(readsPerUpdate[0]), '协议读取次数不能随历史 reserve 数量增长')
+    const before = fs.readFileSync(file, 'utf8')
+    changed = true
+    assert.throws(() => updateLedger(file, { type: 'dispatch', attemptId: 'attempt-0' },
+      { campaignMode: 'synthetic' }), /PROTOCOL_DRIFT/)
+    assert.equal(fs.readFileSync(file, 'utf8'), before)
+    assert.equal(fs.existsSync(`${file}.lock`), false)
+  } finally {
+    readSpy.mockRestore()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('冻结旧selection与旧allocation经boundary回放，新reserve仍按当前协议完整校验', () => {
@@ -5276,7 +5313,8 @@ s14bHistoryTest('S14B 新 revision 认证历史边界与登记证据', ({ histor
   }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
 })
 
-s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝历史终态与代码身份漂移', ({ history: { real, synthetic, ledger, file } }) => {
+// Both historical integration cases validate full ledger prefixes and real Git ownership per mutation.
+s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝历史终态与代码身份漂移', { timeout: 20_000 }, ({ history: { real, synthetic, ledger, file } }) => {
   const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
   const planningAttempt = real.boundaries.historicalPlanningSavedOutlineBoundary.reserveAttempts.at(-1).attemptId
   const changedPlanning = raw => raw.replace(`"type":"unknown","attemptId":"${planningAttempt}"`,
@@ -5334,7 +5372,7 @@ s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝历史终态与
   fs.writeFileSync(file, synthetic.raw)
 })
 
-s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝前缀漂移并限制当前协议追加', ({ history: { real, synthetic, ledger, file } }) => {
+s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝前缀漂移并限制当前协议追加', { timeout: 20_000 }, ({ history: { real, synthetic, ledger, file } }) => {
   const partial = real.boundaries.historicalC16D021261fBoundary
   const diagnostic = real.boundaries.historicalSeparatedReviewB89b011aBoundary
   const ac3 = real.boundaries.historicalC16Ac3af420Boundary

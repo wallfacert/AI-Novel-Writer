@@ -3,7 +3,7 @@ import { ClipboardPaste, FileUp } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useLLMStore } from '../../stores/llm-store'
-import { useLayoutStore } from '../../stores/layout-store'
+import { navigate } from '../../stores/navigation/navigation-intents'
 import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
 import { selectPlanningMaterials, type PlanningMaterial } from '../../services/knowledge-service'
 import { createPlanningMaterialCharacterExtractionWorkflow } from '../../services/workflows/planning-material-workflow'
@@ -134,7 +134,7 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
         return
       }
       setOpen(false)
-      useLayoutStore.getState().openBottomTab('tasks')
+      navigate({ kind: 'run', facet: 'tasks' })
       const runId = await useWorkflowStore.getState().startWorkflow(workflow, true)
       if (!isProjectSessionCurrent(session)) return
       const run = useWorkflowStore.getState().history.find(candidate => candidate.id === runId)

@@ -4,10 +4,11 @@ import { Archive } from 'lucide-react'
 import { ipc } from '../../../services/ipc-client'
 import type { ProjectOverview } from '../../../shared/project-overview'
 import { useLayoutStore } from '../../../stores/layout-store'
+import { navigate } from '../../../stores/navigation/navigation-intents'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { captureProjectSession, isProjectSessionCurrent } from '../../project-session-gate'
-import { confirmDeleteCurrentProject } from '../../project-delete-action'
+import { confirmDeleteCurrentProject, confirmRemoveRecentProject } from '../../project-delete-action'
 import { UpdateSection } from '../../updates/UpdateSection'
 import WelcomePageV2, { type WriterOverview } from './WelcomePageV2'
 
@@ -95,6 +96,7 @@ function useProjectOverview() {
       name: project.name,
       onPreview: () => preview(project),
       onOpen: () => { void useProjectStore.getState().openProject(project.path) },
+      onRemove: () => { void confirmRemoveRecentProject(project) },
     })),
     hasCurrentProject: currentProject !== null && !activeSelection,
     deletableCurrentProject: currentProject && !activeSelection ? { name: currentProject.name, path: currentProject.path } : null,
@@ -104,34 +106,9 @@ function useProjectOverview() {
 export function WriterWelcomePage({ onNewProject }: { onNewProject: () => void }) {
   const { overview, recentProjects, hasCurrentProject, deletableCurrentProject } = useProjectOverview()
   const text = useLocaleStore(state => state.text)
-  const [legacyImportNotice, setLegacyImportNotice] = useState('')
-  const [legacyImportBusy, setLegacyImportBusy] = useState(false)
-  const importLegacyProject = async () => {
-    if (legacyImportBusy) return
-    setLegacyImportNotice('')
-    setLegacyImportBusy(true)
-    try {
-      const sourceRoot = await ipc.invoke('dialog:select-legacy-project')
-      if (!sourceRoot) return
-      const sourceName = sourceRoot.displayName || '旧项目'
-      const target = await ipc.invoke('dialog:select-project-restore-target', `${sourceName}-新版副本`)
-      if (!target) return
-      const result = await ipc.invoke('project:import-legacy-copy', sourceRoot.grantId, target.grantId)
-      if (result.state === 'cancelled') return
-      if (result.state === 'blocked') {
-        setLegacyImportNotice(text(`导入未完成，旧项目保持原样。原因：${result.code}`, `Import did not complete; the original project is unchanged. Reason: ${result.code}`))
-        return
-      }
-      const opened = await useProjectStore.getState().openProject(result.targetRoot).catch(() => false)
-      setLegacyImportNotice(opened
-        ? text('旧项目已导入为独立副本。两份项目的后续修改不会自动同步。', 'Legacy project imported as an independent copy. Future changes do not sync between the two projects.')
-        : text(`副本已建立，但未能自动打开。请用“打开作品”选择：${result.targetRoot}`, `The copy was created but could not be opened. Use Open project to select: ${result.targetRoot}`))
-    } catch (error) {
-      setLegacyImportNotice(text(`导入未完成：${String(error)}`, `Import did not complete: ${String(error)}`))
-    } finally {
-      setLegacyImportBusy(false)
-    }
-  }
+  const legacyImportNotice = useProjectStore(state => state.legacyImportNotice)
+  const legacyImportBusy = useProjectStore(state => state.legacyImportBusy)
+  const importLegacyProject = useProjectStore(state => state.importLegacyProject)
   return <WelcomePageV2
     overview={overview}
     recentProjects={recentProjects}
@@ -145,9 +122,9 @@ export function WriterWelcomePage({ onNewProject }: { onNewProject: () => void }
     legacyImportNotice={legacyImportNotice}
     legacyImportBusy={legacyImportBusy}
     onImportNovel={() => useLayoutStore.getState().openImportNovel()}
-    onContinue={hasCurrentProject ? () => useLayoutStore.getState().setSidebarView('project') : undefined}
+    onContinue={hasCurrentProject ? () => navigate({ kind: 'stage' }) : undefined}
     onDeleteCurrentProject={deletableCurrentProject ? () => void confirmDeleteCurrentProject(deletableCurrentProject) : undefined}
-    backup={<button type="button" onClick={() => useLayoutStore.getState().openSettings('backup')}>
+    backup={<button type="button" onClick={() => navigate({ kind: 'settings', section: 'backup' })}>
       <Archive size={17} />
       {text('项目备份', 'Project backup')}
     </button>}

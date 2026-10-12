@@ -65,3 +65,6 @@ tailwind.config.js.bak
 /public/screenshot/
 /public/logos/
 *.tsbuildinfo
+
+# 浏览器测试失败时生成的截图，不入库
+__screenshots__/

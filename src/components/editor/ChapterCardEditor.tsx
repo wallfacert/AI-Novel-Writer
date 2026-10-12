@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
-import { useLayoutStore } from '../../stores/layout-store'
+import { navigate } from '../../stores/navigation/navigation-intents'
 import { ipc } from '../../services/ipc-client'
 import { clearProjectData } from '../../services/project-clear-service'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
@@ -97,7 +97,7 @@ function isCurrentProjectSession(projectSession: ProjectSessionContext): boolean
 }
 
 /** 章节蓝图编辑器 — 读写 directory.json */
-export default function ChapterCardEditor(props: { projectKey: string; initialChapterNumber?: number; tabId?: string }) {
+export default function ChapterCardEditor(props: { projectKey: string; initialChapterNumber?: number; selectRequest?: number; tabId?: string }) {
   const recoveryTab = useEditorStore(state => state.tabs.find(tab => tab.id === props.tabId && tab.planningRecovery))
   const currentLease = useProjectStore(state => state.currentProject?.sessionLease)
   return recoveryTab ? <BlueprintRecoveryEditor key={`${recoveryTab.id}:${currentLease}`} tab={recoveryTab} projectKey={props.projectKey} /> : <ChapterCardEditorSession {...props} />
@@ -135,6 +135,7 @@ function BlueprintRecoveryEditor({ tab, projectKey }: { tab: EditorTab; projectK
       if (!session) throw new Error(text('项目会话已切换', 'The project session changed.'))
       const fresh = await refresh()
       const candidate = fresh.blueprintRecovery
+      if (candidate?.writeState === 'unavailable') throw new Error(text('旧恢复稿不能保存或续接，可继续编辑或复制', 'This recovery draft cannot be saved or continued. You can still edit or copy it.'))
       const originalRange = tab.planningRecovery?.blueprintRecovery?.editRange
       if (!snapshot || !candidate || candidate.leaseEpoch !== session.leaseId || !originalRange || !snapshot.planningSaveOperationId
         || candidate.writeState !== 'ready' && !candidate.saved) throw new Error(text('当前无法保存，请等待生成结束或检查来源变化', 'Wait for generation to finish or check changed sources before saving.'))
@@ -193,8 +194,15 @@ function BlueprintRecoveryEditor({ tab, projectKey }: { tab: EditorTab; projectK
   return <div className="h-full flex flex-col" aria-label={text('蓝图恢复', 'Blueprint recovery')}>
     <div className="p-3 text-xs space-y-2">
       {currentTab.planningSaveSnapshot?.status === 'saved' && <p>{text('本次恢复已保存，后续修改仅供复制。', 'This recovery is saved. Further edits can only be copied.')}</p>}
-      <p>{text('蓝图未完整生成，原文已保留。请补齐 JSON 中的引号、括号和必填内容，只保留要保存的连续完整章节。保存只写入本地，不会调用模型。', 'The incomplete blueprint text is preserved. Complete the JSON quotes, brackets and required fields. Keep only complete consecutive chapters to save. Saving is local and does not call a model.')}</p>
-      <label>{text('保存到第几章', 'Last complete chapter')} <input type="number" min={tab.planningRecovery?.blueprintRecovery?.editRange?.from} max={tab.planningRecovery?.blueprintRecovery?.editRange?.to} value={end} onChange={event => {
+      {candidate?.writeState === 'unavailable' ? <>
+        <p role="status">{candidate.diagnostic.code === 'GENERATION_BLUEPRINTS_CLEARED'
+          ? text('蓝图已清空，旧恢复稿不能保存或续接', 'Blueprints were cleared. This recovery draft cannot be saved or continued.')
+          : candidate.diagnostic.code === 'GENERATION_DIRECTORY_PROGRESS_INVALID'
+            ? text('蓝图生成进度校验失败，旧恢复稿不能保存或续接', 'Blueprint generation progress failed validation. This recovery draft cannot be saved or continued.')
+            : text('蓝图作者保存记录校验失败，旧恢复稿不能保存或续接', 'The blueprint author save record failed validation. This recovery draft cannot be saved or continued.')}</p>
+        <p>{text('原文已保留，可继续编辑或复制', 'The original text is preserved. You can still edit or copy it.')}</p>
+      </> : <p>{text('蓝图未完整生成，原文已保留。请补齐 JSON 中的引号、括号和必填内容，只保留要保存的连续完整章节。保存只写入本地，不会调用模型。', 'The incomplete blueprint text is preserved. Complete the JSON quotes, brackets and required fields. Keep only complete consecutive chapters to save. Saving is local and does not call a model.')}</p>}
+      <label>{text('保存到第几章', 'Last complete chapter')} <input type="number" disabled={candidate?.writeState === 'unavailable'} min={tab.planningRecovery?.blueprintRecovery?.editRange?.from} max={tab.planningRecovery?.blueprintRecovery?.editRange?.to} value={end} onChange={event => {
         const value = event.target.value
         endRef.current = value; setEnd(value)
         useEditorStore.setState(state => ({ tabs: state.tabs.map(item => item.id === tab.id ? { ...item, planningSaveEnd: value } : item) }))
@@ -213,9 +221,12 @@ function BlueprintRecoveryEditor({ tab, projectKey }: { tab: EditorTab; projectK
 function ChapterCardEditorSession({
   projectKey,
   initialChapterNumber,
+  selectRequest,
 }: {
   projectKey: string
   initialChapterNumber?: number
+  /** 再次请求选中同一章时递增，选中才会重新生效。 */
+  selectRequest?: number
 }) {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
@@ -279,7 +290,7 @@ function ChapterCardEditorSession({
       blueprint => blueprint.chapterNumber === initialChapterNumber,
     )
     if (targetIndex >= 0) setSelectedIdx(targetIndex)
-  }, [initialChapterNumber, loading])
+  }, [initialChapterNumber, selectRequest, loading])
 
   const roleLabel = (role: string) => {
     const labels = getChapterRoleLabels(role)
@@ -773,9 +784,7 @@ function ChapterCardEditorSession({
       !projectSession
       || !sameProjectSessionContext(dataProjectSessionRef.current, projectSession)
     ) return
-    // 通过 layout-store openChapterCreation 传递预填参数，替代 window.dispatchEvent
-    useLayoutStore.getState().openChapterCreation({
-      chapterNumber: bp.chapterNumber,
+    navigate({ kind: 'chapter', chapterNumber: bp.chapterNumber, write: {
       title: bp.title,
       role: bp.role,
       purpose: bp.purpose,
@@ -783,7 +792,7 @@ function ChapterCardEditorSession({
       characters: bp.characters.join('、'),
       userGuidance: bp.userGuidance || '',
       chapterOutline: bp.chapterOutline || '',
-    })
+    } })
   }
 
   /** AI 起草本章场景级大纲 — 只填充编辑框，由作者审阅修改后保存。 */

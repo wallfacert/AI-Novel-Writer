@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import ShellV2 from '../ShellV2'
-import TitleBar from '../../TitleBar'
+import { GuardedTitleBar } from '../../__tests__/guarded-title-bar'
 import LeftToolWindowBar from '../../LeftToolWindowBar'
 import RightToolWindowBar from '../../RightToolWindowBar'
 import EditorArea from '../../../panels/EditorArea'
@@ -12,6 +12,7 @@ import { useAppearanceStore } from '../../../../stores/appearance-bootstrap'
 import { useAgentStore } from '../../../../stores/agent-store'
 import { useEditorStore } from '../../../../stores/editor-store'
 import { useLayoutStore } from '../../../../stores/layout-store'
+import { navigate } from '../../../../stores/navigation/navigation-intents'
 import { useLLMStore } from '../../../../stores/llm-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
@@ -33,7 +34,7 @@ let root: Root
 
 function WriterFixture() {
   const layout = useLayoutStore()
-  return <ShellV2 theme="paper" titleBar={<TitleBar />}
+  return <ShellV2 theme="paper" titleBar={<GuardedTitleBar />}
     rail={<LeftToolWindowBar />} rightRail={<RightToolWindowBar />}
     sidebar={<p>作品资料</p>} editor={<EditorArea onNewProject={vi.fn()} />}
     aiPanel={<AIPanel />}
@@ -129,11 +130,11 @@ it('reveals explicitly opened panels from the bookshelf', async () => {
     expect(useLayoutStore.getState()).toMatchObject({ sidebarView: 'project', bottomTab: tab, bottomPanelOpen: true })
   }
   await act(async () => useLayoutStore.getState().setSidebarView('home'))
-  await act(async () => useLayoutStore.getState().openBottomTab('tasks'))
+  await act(async () => navigate({ kind: 'run', facet: 'tasks' }))
   expect(host.querySelector('#writer-bottom')?.hasAttribute('hidden')).toBe(false)
   expect(useLayoutStore.getState().sidebarView).toBe('project')
   await act(async () => useLayoutStore.getState().setSidebarView('home'))
-  await act(async () => useLayoutStore.getState().openRightPanel('ai-output'))
+  await act(async () => navigate({ kind: 'run', facet: 'output' }))
   expect(host.querySelector('#writer-assistant')?.hasAttribute('hidden')).toBe(false)
   expect(useLayoutStore.getState()).toMatchObject({ sidebarView: 'project', rightView: 'ai-output', aiPanelOpen: true })
   await act(async () => useLayoutStore.getState().setSidebarView('home'))

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Wifi, BookOpen, CheckCircle2, FolderOpen } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
-import { useLayoutStore } from '../../stores/layout-store'
+import { navigate } from '../../stores/navigation/navigation-intents'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { APP_BRAND } from '../../shared/brand'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -12,7 +12,6 @@ export default function StatusBar() {
   const currentProject = useProjectStore((s) => s.currentProject)
   const models = useLLMStore(s => s.models)
   const defaultModelId = useLLMStore(s => s.defaultModelId)
-  const openSettings = useLayoutStore(s => s.openSettings)
   const defaultModel = models.find(
     (m) => m.id === defaultModelId && m.purposes?.some((p) => p !== 'embedding')
   )
@@ -55,7 +54,7 @@ export default function StatusBar() {
         {defaultModel ? (
           <StatusBarSegment
             title={text(`当前模型：${defaultModel.name}`, `Current model: ${defaultModel.name}`)}
-            onClick={() => openSettings()}
+            onClick={() => navigate({ kind: 'settings', section: 'llm' })}
           >
             <Wifi size={11} />
             <span className="opacity-80 max-w-[120px] truncate">{defaultModel.name}</span>
@@ -63,7 +62,7 @@ export default function StatusBar() {
         ) : (
           <StatusBarSegment
             title={text('点击配置模型', 'Click to configure a model')}
-            onClick={() => openSettings()}
+            onClick={() => navigate({ kind: 'settings', section: 'llm' })}
           >
             <span className="opacity-50">{text('未配置模型', 'No model configured')}</span>
           </StatusBarSegment>
@@ -123,7 +122,7 @@ function AITaskCapsule() {
     return (
       <div
         className="ai-task-capsule ai-task-capsule--complete"
-        onClick={() => useLayoutStore.getState().openRightPanel('ai-output')}
+        onClick={() => navigate({ kind: 'run', facet: 'output' })}
       >
         <CheckCircle2 size={10} />
         <span className="truncate">
@@ -143,7 +142,7 @@ function AITaskCapsule() {
     return (
       <div
         className="ai-task-capsule"
-        onClick={() => useLayoutStore.getState().openRightPanel('ai-output')}
+        onClick={() => navigate({ kind: 'run', facet: 'output' })}
         title={text('点击查看任务进度', 'View task progress')}
       >
         {/* 脉冲圆点 */}
@@ -161,7 +160,7 @@ function AITaskCapsule() {
   return (
     <div
       className="ai-task-capsule"
-      onClick={() => useLayoutStore.getState().openRightPanel('ai-output')}
+      onClick={() => navigate({ kind: 'run', facet: 'output' })}
       title={text('点击查看 AI 输出详情', 'View AI output')}
     >
       {/* 脉冲圆点 */}

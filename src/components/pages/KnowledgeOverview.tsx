@@ -23,7 +23,7 @@ import {
   createPlanningMaterialWorkflow,
 } from '../../services/workflows/planning-material-workflow'
 import { useLocaleStore } from '../../stores/locale-store'
-import { useLayoutStore } from '../../stores/layout-store'
+import { navigate } from '../../stores/navigation/navigation-intents'
 import { appErrorMessage } from '../../i18n/app-errors'
 import { ipc } from '../../services/ipc-client'
 import {
@@ -392,7 +392,7 @@ export default function KnowledgeOverview() {
         toast.warning(workflowResourceConflictMessage(locale, conflict.title))
         return
       }
-      useLayoutStore.getState().openBottomTab('tasks')
+      navigate({ kind: 'run', facet: 'tasks' })
       await useWorkflowStore.getState().startWorkflow(extractionWorkflow, true)
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) toast.error(appErrorMessage(locale, error))

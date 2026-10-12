@@ -180,6 +180,17 @@ describe('ChapterCardEditor writing entry', () => {
     expect(useLayoutStore.getState().chapterCreationPrefill?.role).toBe('高潮')
   })
 
+  it('re-selects the requested chapter on a repeated request even after the author picked another one', async () => {
+    installIpc({ blueprints: [1, 2, 3].map(chapterNumber => ({ ...blueprint(chapterNumber), title: `第${chapterNumber}章题` })) })
+    const heading = () => container?.querySelector('h3')?.textContent
+    await act(async () => root?.render(<ChapterCardEditor projectKey={PROJECT_PATH} initialChapterNumber={2} selectRequest={1} />))
+    await vi.waitFor(() => expect(heading()).toBe('第 2 章：第2章题'))
+    await act(async () => [...container!.querySelectorAll('span')].find(span => span.textContent === '第3章题')!.click())
+    expect(heading()).toBe('第 3 章：第3章题')
+    await act(async () => root?.render(<ChapterCardEditor projectKey={PROJECT_PATH} initialChapterNumber={2} selectRequest={2} />))
+    await vi.waitFor(() => expect(heading()).toBe('第 2 章：第2章题'))
+  })
+
   it('propagates blueprint save failure to the exit gate', async () => {
     installIpc({ saveError: '蓝图写入失败' })
     useEditorStore.setState({

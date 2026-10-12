@@ -3,7 +3,7 @@ import { AlertCircle, AlertTriangle, BookOpen, Loader2, Play } from 'lucide-reac
 import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
 import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
-import { useLayoutStore } from '../../stores/layout-store'
+import { navigate } from '../../stores/navigation/navigation-intents'
 import {
   createBatchChapterWorkflow,
   MAX_BATCH_CHAPTERS,
@@ -258,7 +258,7 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
         return
       }
       void startWorkflow(workflow)
-      useLayoutStore.getState().openBottomTab('tasks')
+      navigate({ kind: 'run', facet: 'tasks' })
       addLog('info', frozenCompletionMode === 'draft_review'
         ? (frozenLocale === 'en-US'
           ? `Batch review drafts started: chapters ${frozenStart}–${frozenEnd} (${frozenChapterCount} total).`

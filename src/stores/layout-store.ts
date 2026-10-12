@@ -13,12 +13,25 @@ export type RightView = 'agent' | 'ai-output'
 export type LeftRailItem = SidebarView | 'blueprint' | 'world' | 'plot-tree' | BottomTab
 
 /** 设置弹窗分类 */
-export type SettingsSection = 'llm' | 'embedding' | 'proxy' | 'editor' | 'prompts' | 'skills' | 'backup' | 'about'
+export type SettingsSection = 'appearance' | 'llm' | 'embedding' | 'proxy' | 'editor' | 'prompts' | 'skills' | 'backup' | 'about'
+
+/** 写作此章时预填到章节创作弹窗的参数，章号由 chapter 意图给出。 */
+export type ChapterWritePrefill = {
+  title: string
+  role: string
+  purpose: string
+  keyEvents: string
+  characters: string
+  userGuidance: string
+  /** 作者写好的本章场景大纲，胜过自动短大纲 */
+  chapterOutline: string
+}
 
 /** 章节创建对话框的预填参数 */
-export type ChapterCreationPrefill = Record<string, unknown> | null
+export type ChapterCreationPrefill = (ChapterWritePrefill & { chapterNumber: number }) | null
 
-interface LayoutState {
+/** 旧外壳读取的布局字段。跨层导航经 `navigate` 写入，见 `navigation/legacy-layout.ts`。 */
+export interface LayoutFields {
   // ===== 侧边栏 =====
   sidebarOpen: boolean
   sidebarView: SidebarView
@@ -30,6 +43,7 @@ interface LayoutState {
   aiPanelWidth: number
   /** 右侧面板当前视图：Agent 对话 / AI 输出 */
   rightView: RightView
+  rightPanelRunId: string | null
 
   // ===== 底部面板 =====
   bottomPanelOpen: boolean
@@ -43,7 +57,7 @@ interface LayoutState {
   // ===== 全局弹窗状态（替代 window.dispatchEvent 事件总线）=====
   /** 设置弹窗是否打开 */
   settingsOpen: boolean
-  /** 设置弹窗打开时默认定位的分类 */
+  /** 设置弹窗当前的分类：打开时由入口指定，作者点左侧分类时更新；切换外壳重挂弹窗后仍停在这里。 */
   settingsSection: SettingsSection
   /** 新建项目对话框是否打开 */
   newProjectOpen: boolean
@@ -57,8 +71,9 @@ interface LayoutState {
   chapterCreationPrefill: ChapterCreationPrefill
   /** 直接新增章节（粘贴导入草稿）对话框是否打开 */
   directChapterImportOpen: boolean
+}
 
-  // ===== Actions =====
+interface LayoutState extends LayoutFields {
   toggleSidebar: () => void
   setSidebarView: (view: SidebarView, activeRailItem?: LeftRailItem) => void
   setSidebarWidth: (width: number) => void
@@ -66,16 +81,14 @@ interface LayoutState {
   setAIPanelOpen: (open: boolean) => void
   setAIPanelWidth: (width: number) => void
   setRightView: (view: RightView) => void
-  /** 打开右侧面板并切换到指定视图 */
-  openRightPanel: (view: RightView) => void
+  /** 打开右侧面板并切到写作助手；AI 输出经 `navigate` 打开。 */
+  openAgentPanel: () => void
   toggleBottomPanel: () => void
   setBottomTab: (tab: BottomTab) => void
   setBottomPanelHeight: (height: number) => void
-  openBottomTab: (tab: BottomTab) => void
   toggleImmersion: () => void
 
   // ===== 全局弹窗 Actions =====
-  openSettings: (section?: SettingsSection, activeRailItem?: LeftRailItem) => void
   closeSettings: () => void
   openNewProject: () => void
   closeNewProject: () => void
@@ -83,7 +96,6 @@ interface LayoutState {
   closeExport: () => void
   openImportNovel: () => void
   closeImportNovel: () => void
-  openChapterCreation: (prefill?: ChapterCreationPrefill) => void
   closeChapterCreation: () => void
   openDirectChapterImport: () => void
   closeDirectChapterImport: () => void
@@ -99,6 +111,7 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
   aiPanelOpen: true,
   aiPanelWidth: 320,
   rightView: 'agent',
+  rightPanelRunId: null,
 
   bottomPanelOpen: true,
   bottomTab: 'tasks',
@@ -132,19 +145,13 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
     }),
   setSidebarWidth: (width) => set({ sidebarWidth: Math.max(200, Math.min(500, width)) }),
 
-  toggleAIPanel: () => {
-    if (get().sidebarView === 'home') {
-      get().openRightPanel(get().rightView)
-      return
-    }
-    set((s) => ({ aiPanelOpen: !s.aiPanelOpen, immersive: false, preImmersivePanels: null }))
-  },
+  toggleAIPanel: () => set((s) => ({ aiPanelOpen: !s.aiPanelOpen, immersive: false, preImmersivePanels: null })),
   setAIPanelOpen: (open) => set({ aiPanelOpen: open, ...(open ? { immersive: false, preImmersivePanels: null } : {}) }),
   setAIPanelWidth: (width) => set({ aiPanelWidth: Math.max(260, Math.min(600, width)) }),
   setRightView: (view) => set({ rightView: view }),
-  openRightPanel: (view) => {
+  openAgentPanel: () => {
     if (get().sidebarView === 'home') get().setSidebarView('project')
-    set({ aiPanelOpen: true, rightView: view, immersive: false, preImmersivePanels: null })
+    set({ aiPanelOpen: true, rightView: 'agent', rightPanelRunId: null, immersive: false, preImmersivePanels: null })
   },
 
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen, immersive: false, preImmersivePanels: null })),
@@ -162,10 +169,6 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
     })
   },
   setBottomPanelHeight: (height) => set({ bottomPanelHeight: Math.max(100, Math.min(500, height)) }),
-  openBottomTab: (tab) => {
-    if (get().sidebarView === 'home') get().setSidebarView('project')
-    set({ bottomPanelOpen: true, bottomTab: tab, activeRailItem: tab, immersive: false, preImmersivePanels: null })
-  },
   toggleImmersion: () => set((s) => s.immersive
     ? { ...s.preImmersivePanels, immersive: false, preImmersivePanels: null }
     : {
@@ -181,8 +184,6 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
     }),
 
   // 全局弹窗 Actions
-  openSettings: (section = 'llm', activeRailItem = 'settings') =>
-    set({ settingsOpen: true, settingsSection: section, activeRailItem }),
   closeSettings: () => set({ settingsOpen: false }),
   openNewProject: () => set({ newProjectOpen: true }),
   closeNewProject: () => set({ newProjectOpen: false }),
@@ -190,7 +191,6 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
   closeExport: () => set({ exportOpen: false }),
   openImportNovel: () => set({ importNovelOpen: true }),
   closeImportNovel: () => set({ importNovelOpen: false }),
-  openChapterCreation: (prefill = null) => set({ chapterCreationOpen: true, chapterCreationPrefill: prefill }),
   closeChapterCreation: () => set({ chapterCreationOpen: false, chapterCreationPrefill: null }),
   openDirectChapterImport: () => set({ directChapterImportOpen: true }),
   closeDirectChapterImport: () => set({ directChapterImportOpen: false }),

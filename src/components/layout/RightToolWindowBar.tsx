@@ -2,6 +2,7 @@ import { Bot, Sparkles } from 'lucide-react'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { navigate } from '../../stores/navigation/navigation-intents'
 
 /**
  * 右侧工具窗口栏（RightToolWindowBar）
@@ -12,26 +13,19 @@ export default function RightToolWindowBar() {
   const text = useLocaleStore(s => s.text)
   const aiPanelOpen = useLayoutStore(s => s.aiPanelOpen)
   const rightView = useLayoutStore(s => s.rightView)
+  const atHome = useLayoutStore(s => s.sidebarView === 'home')
   const toggleAIPanel = useLayoutStore(s => s.toggleAIPanel)
-  const openRightPanel = useLayoutStore(s => s.openRightPanel)
+  const openAgentPanel = useLayoutStore(s => s.openAgentPanel)
   const currentRun = useWorkflowStore((s) => s.currentRun)
 
   /** 工作流活跃时给 AI 输出按钮显示脉冲 */
   const showPulse = currentRun && (currentRun.status === 'running' || currentRun.status === 'waiting')
 
-  /** 点击按钮逻辑：
-   *  - 如果面板关闭 → 打开并切到对应视图
-   *  - 如果面板已打开且已是此视图 → 关闭面板
-   *  - 如果面板已打开但是另一个视图 → 切到此视图
-   */
+  /** 面板已在项目视图里显示此视图时关闭，否则打开并切到此视图（首页隐藏面板，总是打开）。 */
   const handleClick = (view: 'agent' | 'ai-output') => {
-    if (!aiPanelOpen) {
-      openRightPanel(view)
-    } else if (rightView === view) {
-      toggleAIPanel()
-    } else {
-      openRightPanel(view)
-    }
+    if (aiPanelOpen && rightView === view && !atHome) toggleAIPanel()
+    else if (view === 'ai-output') navigate({ kind: 'run', facet: 'output' })
+    else openAgentPanel()
   }
 
   return (

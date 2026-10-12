@@ -20,7 +20,7 @@ const originalEditorState = useEditorStore.getState()
 
 let root: Root | undefined
 let container: HTMLDivElement | undefined
-let onClose: ReturnType<typeof vi.fn>
+let onClose: ReturnType<typeof vi.fn<() => void>>
 let invoke: ReturnType<typeof vi.fn>
 
 function project(): ProjectData {

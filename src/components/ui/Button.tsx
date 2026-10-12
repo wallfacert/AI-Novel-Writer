@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { Slot } from '@radix-ui/react-slot'
 import { cva, type VariantProps } from 'class-variance-authority'
+import { clsx } from 'clsx'
 import { cn } from '../../lib/utils'
 
  
@@ -39,24 +40,52 @@ export const buttonVariants = cva(
   }
 )
 
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
+type NativeButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement>
+
+/** 旧外壳的按钮变体，RD-10 删除旧外壳时一并删除，届时 Button 只剩纸墨六种。 */
+type LegacyButtonProps = NativeButtonProps & VariantProps<typeof buttonVariants> & {
   asChild?: boolean
 }
 
-const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
-    const Comp = asChild ? Slot : 'button'
+/** 纸墨按钮：主、次、文字（幽灵）、危险描边、危险实心与图标。 */
+export type InkButtonVariant = 'primary' | 'secondary' | 'text' | 'danger' | 'danger-solid' | 'icon'
+export type InkButtonSize = 'sm' | 'md' | 'lg'
+
+type InkButtonProps = NativeButtonProps & { size?: InkButtonSize } & (
+  | { variant: Exclude<InkButtonVariant, 'icon'> }
+  | { variant: 'icon'; 'aria-label': string }
+)
+
+export type ButtonProps = LegacyButtonProps | InkButtonProps
+
+const inkVariants: ReadonlySet<string> = new Set<InkButtonVariant>(['primary', 'secondary', 'text', 'danger', 'danger-solid', 'icon'])
+
+function isInkButton(props: ButtonProps): props is InkButtonProps {
+  return typeof props.variant === 'string' && inkVariants.has(props.variant)
+}
+
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>((props, ref) => {
+  if (isInkButton(props)) {
+    const { className, variant, size = 'md', type = 'button', ...rest } = props
     return (
-      <Comp
-        className={cn(buttonVariants({ variant, size, className }))}
+      <button
         ref={ref}
-        {...props}
+        type={type}
+        className={clsx('pi-btn', `pi-btn--${variant}`, size !== 'md' && `pi-btn--${size}`, className)}
+        {...rest}
       />
     )
   }
-)
+  const { className, variant, size, asChild = false, ...rest } = props
+  const Comp = asChild ? Slot : 'button'
+  return (
+    <Comp
+      className={cn(buttonVariants({ variant, size, className }))}
+      ref={ref}
+      {...rest}
+    />
+  )
+})
 Button.displayName = 'Button'
 
 export { Button }

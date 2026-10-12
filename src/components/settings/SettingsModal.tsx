@@ -41,10 +41,8 @@ import ProjectBackupPanel from '../backups/ProjectBackupPanel'
 
 // ==================== 分类定义 ====================
 
-type SettingsModalSection = SettingsSection | 'appearance'
-
 interface SectionItem {
-  id: SettingsModalSection
+  id: SettingsSection
   label: string
   labelEn: string
   icon: React.ReactNode
@@ -75,15 +73,8 @@ interface SettingsModalProps {
 /** 全屏设置弹窗 */
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const text = useLocaleStore(s => s.text)
-  const requestedSection = useLayoutStore(s => s.settingsSection)
-  const [section, setSection] = useState<SettingsModalSection>(requestedSection)
-
-  useEffect(() => {
-    if (!open) return
-    // 在提交后同步外部请求，避免 effect 阶段同步 setState 的级联渲染。
-    const syncTimer = window.setTimeout(() => setSection(requestedSection), 0)
-    return () => window.clearTimeout(syncTimer)
-  }, [open, requestedSection])
+  const section = useLayoutStore(s => s.settingsSection)
+  const setSection = (next: SettingsSection) => useLayoutStore.setState({ settingsSection: next })
 
   if (!open) return null
 
@@ -93,6 +84,9 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
       style={{ backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={text('设置', 'Settings')}
         className="relative flex w-[880px] h-[600px] rounded-2xl overflow-hidden shadow-2xl"
         style={{
           backgroundColor: 'var(--color-editor-bg)',

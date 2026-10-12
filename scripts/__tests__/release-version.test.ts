@@ -1,31 +1,34 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-describe('v1.2.0 candidate metadata', () => {
-  it('uses the release version in package metadata', () => {
+describe('release metadata', () => {
+  it('has a valid package version and matching current release notes', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }
-    expect(pkg.version).toBe('1.2.0')
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/u)
+    const notes = readFileSync(`.release/notes/v${pkg.version}.md`, 'utf8')
+    expect(notes.split(/\r?\n/u)[0].trim()).toBe(`# ${pkg.version}`)
   })
 
-  it('resolves the release tag and exact seven-asset contract from the package version', () => {
+  it('resolves the exact seven-asset contract from the package version', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }
     const profile = JSON.parse(readFileSync('.release/release-profile.json', 'utf8')) as {
       releaseAssets: Array<{ name: string }>
+      releaseChannel: { draft: boolean; prerelease: boolean; expectedLatest: boolean }
     }
 
-    expect(`v${pkg.version}`).toBe('v1.2.0')
+    expect(profile.releaseChannel).toEqual({ draft: false, prerelease: false, expectedLatest: true })
     expect(profile.releaseAssets.map(({ name }) => name.replaceAll('{version}', pkg.version))).toEqual([
-      'ai-novel-writer-setup-1.2.0.exe',
-      'ai-novel-writer-setup-1.2.0.exe.blockmap',
+      `ai-novel-writer-setup-${pkg.version}.exe`,
+      `ai-novel-writer-setup-${pkg.version}.exe.blockmap`,
       'latest.yml',
-      'ai-novel-writer-mac-arm64-1.2.0-installer.dmg',
-      'ai-novel-writer-mac-arm64-1.2.0-installer.dmg.sha256',
-      'ai-novel-writer-mac-x64-1.2.0-installer.dmg',
-      'ai-novel-writer-mac-x64-1.2.0-installer.dmg.sha256',
+      `ai-novel-writer-mac-arm64-${pkg.version}-installer.dmg`,
+      `ai-novel-writer-mac-arm64-${pkg.version}-installer.dmg.sha256`,
+      `ai-novel-writer-mac-x64-${pkg.version}-installer.dmg`,
+      `ai-novel-writer-mac-x64-${pkg.version}-installer.dmg.sha256`,
     ])
   })
 
-  it('documents the bilingual 1.1.0 scope, retained features, and signing disclosure', () => {
+  it('documents the bilingual 1.1.0 notes, current README version, retained features, and signing disclosure', () => {
     const notes = readFileSync('.release/notes/v1.1.0.md', 'utf8')
     const previousNotes = readFileSync('.release/notes/v1.0.0.md', 'utf8')
     const chineseReadme = readFileSync('README.md', 'utf8')
@@ -60,8 +63,8 @@ describe('v1.2.0 candidate metadata', () => {
       'not notarized',
     ]) expect(notes).toContain(expected)
 
-    expect(chineseReadme).toContain('v1.1.0')
-    expect(englishReadme).toContain('v1.1.0')
+    expect(chineseReadme).toContain('> ## 1.2.0-Preview')
+    expect(englishReadme).toContain('> ## 1.2.0-Preview')
 
     const zhRetained = previousNotes
       .slice(0, previousNotes.indexOf('## 安装提示'))
@@ -81,13 +84,13 @@ describe('v1.2.0 candidate metadata', () => {
     const chineseReadme = readFileSync('README.md', 'utf8')
     const englishReadme = readFileSync('README_en.md', 'utf8')
 
-    // Current release metadata is checked above; README wording can evolve.
     for (const readme of [chineseReadme, englishReadme]) {
       for (const expected of [
         'Windows x64',
         'Apple Silicon',
         'Intel',
-        'https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest',
+        '1.2.0-Preview',
+        'https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest)',
       ]) expect(readme).toContain(expected)
 
       for (const installer of [
@@ -98,8 +101,9 @@ describe('v1.2.0 candidate metadata', () => {
     }
 
     for (const expected of [
-      '尚未进行代码签名',
+      '未进行代码签名',
       'ad-hoc 签名',
+      '未使用 Developer ID 签名',
       '未使用 Developer ID 签名或公证',
     ]) expect(chineseReadme).toContain(expected)
 
